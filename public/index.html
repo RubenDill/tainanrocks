@@ -496,6 +496,41 @@ const gridUniform = { value: 0 };   // 5 cm reference grid (G)
 const GRID_M = 0.05;
 const edgeMat = new THREE.LineBasicMaterial({ color: '#1e232a', transparent: true, opacity: 0.55, clippingPlanes: cutPlanes });
 const curveMat = new THREE.LineBasicMaterial({ color: '#1e232a', transparent: true, opacity: 0.75, clippingPlanes: cutPlanes });
+// The cubes' grid (G) lies on the six planes of each cube's bounding box only, floating over the
+// voids where a face is open, never on the surfaces inside. One see-through box per model; its
+// `gridPos` attribute holds template coordinates (less a snapped origin, to keep the numbers small).
+const cageMat = new THREE.MeshBasicMaterial({ color: '#1e232a', transparent: true, depthWrite: false, clippingPlanes: cutPlanes,
+  polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 });
+cageMat.visible = false;
+cageMat.onBeforeCompile = (shader) => {
+  shader.vertexShader = shader.vertexShader
+    .replace('#include <common>', '#include <common>\nattribute vec3 gridPos;\nvarying vec3 vGridPos;\nvarying vec3 vGridNormal;')
+    .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGridPos = gridPos;\nvGridNormal = normal;');
+  shader.fragmentShader = shader.fragmentShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vGridPos;\nvarying vec3 vGridNormal;')
+    .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+      // lines where the plane crosses a multiple of 5 cm (not along the plane's own direction),
+      // faded out where the squares get too small to read
+      vec3 gc = vGridPos / ${GRID_M.toFixed(3)};
+      vec3 gw = fwidth(gc);
+      vec3 gd = abs(fract(gc - 0.5) - 0.5) / max(gw, vec3(1e-6));
+      vec3 gl = (1.0 - min(gd, 1.0)) * (1.0 - abs(vGridNormal)) * (1.0 - smoothstep(0.12, 0.3, gw));
+      float line = max(gl.x, max(gl.y, gl.z));
+      if (line < 0.01) discard;
+      gl_FragColor.a *= line * 0.6;`);
+};
+cageMat.customProgramCacheKey = () => 'cage';
+function makeCage(box, center) {
+  const size = box.getSize(new THREE.Vector3());
+  const geo = new THREE.BoxGeometry(size.x, size.y, size.z);
+  const pos = geo.attributes.position, shift = snapShift(center, new THREE.Vector3());
+  const g = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) { g[i * 3] = pos.getX(i) + shift.x; g[i * 3 + 1] = pos.getY(i) + shift.y; g[i * 3 + 2] = pos.getZ(i) + shift.z; }
+  geo.setAttribute('gridPos', new THREE.BufferAttribute(g, 3));
+  const cage = new THREE.Mesh(geo, cageMat);
+  cage.renderOrder = 1;
+  return cage;
+}
 // Matrix tiles fade in and out with the view.
 const tileMat = new THREE.MeshLambertMaterial({ color: '#eef0f1', transparent: true, opacity: 0, depthWrite: false });
 const dashMat = new THREE.LineDashedMaterial({ color: '#8f99a3', transparent: true, opacity: 0 });
@@ -582,9 +617,8 @@ async function buildGroup(id, url) {
     const mat = new THREE.MeshStandardMaterial({ color: surfaceColor(id, modelColor), roughness: 0.92, metalness: 0,
       side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
     mat.clippingPlanes = cutPlanes;
-    // the rock pattern and the grid are measured from a nearby origin (a whole number of rock repeats
-    // and grid squares: 80 cm), so models far from 0,0,0 stay sharp instead of losing it to
-    // floating-point rounding, and the grid still lines up with the template's coordinates
+    // the rock pattern is measured from a nearby origin (a whole number of rock repeats: 80 cm), so
+    // models far from 0,0,0 stay sharp instead of losing it to floating-point rounding
     g.computeBoundingBox();
     const near = g.boundingBox.getCenter(new THREE.Vector3()), repeat = SNAP_M / scale;
     near.set(Math.round(near.x / repeat) * repeat, Math.round(near.y / repeat) * repeat, Math.round(near.z / repeat) * repeat);
@@ -647,7 +681,8 @@ function loadModel(id, url) {
       const center = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
       const size = box.isEmpty() ? new THREE.Vector3() : box.getSize(new THREE.Vector3());
       raw.position.copy(center).negate();   // hang the model around its centre inside the holder
-      return { raw, box, center, size, modelColor };
+      const cage = box.isEmpty() ? null : makeCage(box, center);   // the grid on its six planes
+      return { raw, box, center, size, modelColor, cage };
     });
     p.catch(() => { if (modelCache[url] === p) delete modelCache[url]; });
     modelCache[url] = p;
@@ -657,10 +692,13 @@ function loadModel(id, url) {
 function disposeModel(url) {
   const p = modelCache[url];
   delete modelCache[url];
-  p?.then((m) => m.raw.traverse((o) => {
-    o.geometry?.dispose();
-    if (o.material && o.material !== edgeMat && o.material !== curveMat) o.material.dispose();
-  }), () => {});
+  p?.then((m) => {
+    m.cage?.geometry.dispose();
+    m.raw.traverse((o) => {
+      o.geometry?.dispose();
+      if (o.material && o.material !== edgeMat && o.material !== curveMat) o.material.dispose();
+    });
+  }, () => {});
 }
 function paint(id, raw) {
   raw.traverse((o) => { if (o.isMesh) o.material.color.copy(surfaceColor(id, o.userData.modelColor)); });
@@ -679,17 +717,20 @@ function showModel(id, m, idx) {
   }
   if (b.raw !== m.raw) {
     if (b.raw) b.holder.remove(b.raw);
+    if (b.cage) b.holder.remove(b.cage);
     paint(id, m.raw);
     b.holder.add(m.raw);
+    if (m.cage) b.holder.add(m.cage);
   }
   const v = groupVersions[id][idx];
   Object.assign(b, { url: v.url, publishedAt: v.publishedAt, version: idx, versionCount: groupVersions[id].length,
-    raw: m.raw, box: m.box, center: m.center, size: m.size, modelColor: m.modelColor });
+    raw: m.raw, cage: m.cage, box: m.box, center: m.center, size: m.size, modelColor: m.modelColor });
 }
 function hideBlock(id) {
   const b = blocks[id];
   if (!b) return;
   if (b.raw) b.holder.remove(b.raw);
+  if (b.cage) b.holder.remove(b.cage);
   scene.remove(b.holder);
   delete blocks[id];
 }
@@ -2131,7 +2172,6 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
     shader.uniforms.rockOn = rockUniforms.rockOn;
     shader.uniforms.rockRelief = rockUniforms.rockRelief;
     shader.uniforms.sectionOn = sectionUniform;
-    shader.uniforms.gridOn = gridUniform;
     shader.uniforms.rockScale = { value: metresPerUnit / ROCK_TILE_M };
     shader.uniforms.rockMetres = { value: metresPerUnit };
     shader.uniforms.rockOrigin = { value: origin };
@@ -2146,7 +2186,6 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
         uniform float rockMetres;
         uniform float rockRelief;
         uniform float sectionOn;
-        uniform float gridOn;
         varying vec3 vRockPos;
         varying vec3 vRockNormal;
         varying float vRockZ;
@@ -2174,19 +2213,6 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
         }
 `)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
-        // 5 cm grid in the template's coordinates: lines where the surface crosses a multiple of 5 cm
-        // (not along the face's own direction), faded out where the squares get too small to read
-        if (gridOn > 0.5) {
-          vec3 gc = vRockPos * rockMetres / ${GRID_M.toFixed(3)};
-          vec3 gw = fwidth(gc);
-          vec3 gd = abs(fract(gc - 0.5) - 0.5) / max(gw, vec3(1e-6));
-          vec3 gl = (1.0 - min(gd, 1.0)) * (1.0 - smoothstep(0.55, 0.85, abs(normalize(vRockNormal))))
-            * (1.0 - smoothstep(0.12, 0.3, gw));
-          float line = max(gl.x, max(gl.y, gl.z));
-          vec3 c = gl_FragColor.rgb;
-          vec3 ink = dot(c, vec3(0.299, 0.587, 0.114)) > 0.32 ? c * 0.35 : mix(c, vec3(1.0), 0.65);
-          gl_FragColor.rgb = mix(c, ink, line * 0.75);
-        }
         // inside faces seen through a cut (only where a model isn't closed; elsewhere the section caps
         // cover them): the same flat poché grey as the caps, without light or texture
         if (sectionOn > 0.5 && !gl_FrontFacing) gl_FragColor = vec4(0.361, 0.380, 0.408, 1.0);`)
@@ -2416,8 +2442,8 @@ cuts.forEach((c, a) => {
 });
 btnSection.onclick = () => setSection(!sectionOn);
 
-// ---------- reference grid (G): 5 × 5 cm squares in the template's coordinates, on the cubes (see
-// rockify), on the ground, on the section caps and in the interface drawings. The ground and the caps
+// ---------- reference grid (G): 5 × 5 cm squares in the template's coordinates, on the cubes' six
+// planes (see makeCage), on the ground, on the section caps and in the interface drawings. The ground and the caps
 // work out template coordinates from where a cube is right now: template = (world − holder) / scale +
 // the cube's centre (less a snapped origin, to keep the numbers small).
 function gridRefUniforms() {
@@ -2499,6 +2525,7 @@ function setGrid(on) {
   gridOn = on;
   gridUniform.value = on ? 1 : 0;
   groundGrid.visible = on;
+  cageMat.visible = on;
   btnGrid.setAttribute('aria-pressed', on);
   renderInterfaces();   // the drawings get (or lose) their grid
 }
