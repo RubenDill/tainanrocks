@@ -2658,8 +2658,11 @@ const esc = (t) => String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&
 function showCard(key) { cardFor = key; renderCard(); }
 function hideCard() { cardFor = null; renderCard(); }
 function renderCard() {
-  const slot = cardFor && slotList.find((x) => x.key === cardFor);
-  highlight(slot && slot.id);
+  // One by one always shows the card of the group in view (no close button); elsewhere it opens on a click
+  const pinned = view === 'single';
+  const key = pinned ? selected : cardFor;
+  const slot = key && slotList.find((x) => x.key === key);
+  highlight(!pinned && slot && slot.id);   // no glow on the only cube in view
   if (!slot || view === 'interfaces') { cardEl.hidden = true; return; }
   cardEl.hidden = false;
   const b = slot.id && blocks[slot.id];
@@ -2695,13 +2698,13 @@ function renderCard() {
   }
   const sub = !b ? '' : `${b.versionCount > 1 ? `Version ${b.version + 1} of ${b.versionCount} · ` : ''}published ${historyAt === null ? timeAgo(b.publishedAt) : 'at ' + clock(b.publishedAt)}`;
   cardEl.innerHTML = `<header><span class="chip" style="--c:${esc(color)}"></span><h2>${esc(slot.name)}</h2>
-      <button class="close" type="button" aria-label="Close">×</button></header>
+      ${pinned ? '' : '<button class="close" type="button" aria-label="Close">×</button>'}</header>
     ${sub ? `<p class="sub">${sub}</p>` : ''}${body}
-    <div class="row"><button type="button" data-act="single">One by one</button><button type="button" data-act="interfaces">Interfaces</button></div>
+    <div class="row">${pinned ? '' : '<button type="button" data-act="single">One by one</button>'}<button type="button" data-act="interfaces">Interfaces</button></div>
     ${b ? `<div class="row"><span>Download .3dm:</span><button type="button" data-act="dl-this">This version</button>
       ${b.versionCount > 1 ? `<button type="button" data-act="dl-versions">All ${b.versionCount} versions</button>` : ''}
       <button type="button" data-act="dl-all">Every group</button></div>` : ''}`;
-  cardEl.querySelector('.close').onclick = hideCard;
+  if (!pinned) cardEl.querySelector('.close').onclick = hideCard;
   cardEl.querySelectorAll('[data-act]').forEach((btn) => {
     btn.onclick = () => {
       const act = btn.dataset.act;
