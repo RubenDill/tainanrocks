@@ -79,6 +79,7 @@ Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen w
 | **C** | Colours: group colours / model colours / white model |
 | **T** | Rock: show the cubes in stone |
 | **X** | Section: cut the model with planes along X, Y and Z |
+| **G** | 5 × 5 cm reference grid |
 | **Esc** | Close the cube's card |
 | **L** | Group labels |
 | **F** | Fit the view |
@@ -92,6 +93,8 @@ Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen w
 Clicking a group chip at the bottom left opens that group in One by one with its card. Each chip shows when the group last published; a dot marks the ones published in the last 90 seconds.
 
 **Section** (X) cuts the model with up to three planes, one along each axis. Tick X, Y or Z, slide the plane through the model (its position is a share of what's on screen, so it works in every view), and ⇄ keeps the other side. A plane that's switched on removes the side the camera is on, so the cut faces you. Where a plane cuts through material it shows a flat, solid grey section (stencil-buffer caps), and voids show as openings in it. Planes sit half a millimetre inside the part that's kept, so a cut exactly on the joint between two touching cubes is clean. Thin red lines mark the planes, and clicking skips what's cut away.
+
+**Grid** (G) draws 5 × 5 cm squares in the template's own coordinates, so a 450 mm cube shows 9 × 9 squares and the lines run on from one cube to the next. They appear on every surface of the cubes (in every view, moving with each cube, also over the rock texture), on the ground around the model (lined up with the selected cube), on the section cuts, and in the 2D interface drawings. Where the squares would get too small to read they fade out.
 
 **Rock** (T) shows the cubes as coarse, 3D-printed sand-stone: rounded grains of about 4 and 2 mm with relief that catches the light (bump mapping), soft lumps and faint horizontal print layers every 6 mm. It's generated in the browser (no image files, about half a second the first time), is fixed to each cube, and fades to plain colour in the distance rather than shimmering. Edge lines are hidden while it's on. Together with the white model it's plain pinkish-grey stone; with group colours each cube is a tinted stone.
 
@@ -111,7 +114,7 @@ The address keeps the current view, so you can bookmark one: `…/#matrix`, `…
 
 A solid line shows this cube's edges in the plane, a dashed line the neighbour's. Next to it are the areas in m² and as a share of the shared face: solid surface touching, voids connecting, each one-sided area, and how much of each cube's voids on that face open into the other's. Areas are counted on a fine raster (about 0.6 mm per pixel on a 0.45 m face). Faces count as touching when the cubes' bounding boxes sit within 3% of a cube's size of each other. **Print** prints the selected face's drawing and numbers.
 
-URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` the starting separation (1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone. Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
+URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` the starting separation (1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone, `?grid=1` with the reference grid on. Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
 
 ## Publishing from Grasshopper
 

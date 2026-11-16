@@ -367,6 +367,7 @@
     <button id="btn-color" title="Switch colors: groups, model, white (C)"><kbd>C</kbd> <span id="color-name">Group colors</span></button>
     <button id="btn-rock" aria-pressed="false" title="Show the cubes in stone (T)"><kbd>T</kbd> Rock</button>
     <button id="btn-section" aria-pressed="false" title="Cut the model with planes along X, Y and Z (X)"><kbd>X</kbd> Section</button>
+    <button id="btn-grid" aria-pressed="false" title="5 × 5 cm reference grid on the cubes, the ground, the cuts and the drawings (G)"><kbd>G</kbd> Grid</button>
     <button id="btn-labels" aria-pressed="true" title="Show group labels (L)"><kbd>L</kbd> Labels</button>
     <button id="btn-history" aria-pressed="true" title="Show or hide the history bar (H)"><kbd>H</kbd> History</button>
     <button id="btn-fit" title="Frame the view (F)"><kbd>F</kbd> Fit</button>
@@ -491,6 +492,8 @@ scene.add(ground);
 // Section planes (X key): always three, parked far away when off, so switching never recompiles shaders.
 const cutPlanes = [0, 1, 2].map(() => new THREE.Plane(new THREE.Vector3(0, 0, 1), 1e9));
 const sectionUniform = { value: 0 };
+const gridUniform = { value: 0 };   // 5 cm reference grid (G)
+const GRID_M = 0.05;
 const edgeMat = new THREE.LineBasicMaterial({ color: '#1e232a', transparent: true, opacity: 0.55, clippingPlanes: cutPlanes });
 const curveMat = new THREE.LineBasicMaterial({ color: '#1e232a', transparent: true, opacity: 0.75, clippingPlanes: cutPlanes });
 // Matrix tiles fade in and out with the view.
@@ -511,6 +514,7 @@ const MODES = ['groups', 'model', 'white'];
 const MODE_NAMES = { model: 'Model colors', groups: 'Group colors', white: 'White model' };
 let mode = MODES.includes(params.get('colors')) ? params.get('colors') : 'groups';
 let rockOn = params.get('rock') === '1';
+let gridOn = params.get('grid') === '1';
 const STONE = new THREE.Color('#aa9e99');   // printed-sand grey with a hint of pink
 function colorFor(id, modelColor) {
   if (mode === 'white') return WHITE;
@@ -578,10 +582,11 @@ async function buildGroup(id, url) {
     const mat = new THREE.MeshStandardMaterial({ color: surfaceColor(id, modelColor), roughness: 0.92, metalness: 0,
       side: THREE.DoubleSide, polygonOffset: true, polygonOffsetFactor: 1, polygonOffsetUnits: 1 });
     mat.clippingPlanes = cutPlanes;
-    // the rock pattern is measured from a nearby origin (a whole number of pattern repeats), so models
-    // far from 0,0,0 keep their grain sharp instead of losing it to floating-point rounding
+    // the rock pattern and the grid are measured from a nearby origin (a whole number of rock repeats
+    // and grid squares: 80 cm), so models far from 0,0,0 stay sharp instead of losing it to
+    // floating-point rounding, and the grid still lines up with the template's coordinates
     g.computeBoundingBox();
-    const near = g.boundingBox.getCenter(new THREE.Vector3()), repeat = ROCK_TILE_M / scale;
+    const near = g.boundingBox.getCenter(new THREE.Vector3()), repeat = SNAP_M / scale;
     near.set(Math.round(near.x / repeat) * repeat, Math.round(near.y / repeat) * repeat, Math.round(near.z / repeat) * repeat);
     rockify(mat, scale, near);
     const mesh = new THREE.Mesh(g, mat);
@@ -893,6 +898,7 @@ function layout() {
 
   fitShadows(bounds.clone().union(grid));
   currentBounds = bounds;
+  placeGroundGrid(bounds);
   updateCuts();
   updateSunPath();
   renderContext();
@@ -1218,6 +1224,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'a') setAnimals(!animalsOn);
   else if (k === 't') setRock(!rockOn);
   else if (k === 'x') setSection(!sectionOn);
+  else if (k === 'g') setGrid(!gridOn);
   else if (k === 'escape') { if (presenting) setPresenting(false); else hideCard(); }
   else if (k === 'h') setHistoryShown(!historyShown);
   else if (k === 'p') setPresenting(!presenting);
@@ -1549,7 +1556,7 @@ function interfaceDrawing(gid, c) {
   const g = blocks[gid], h = blocks[c.hid];
   const gSlot = slotList.find((x) => x.id === gid), hSlot = slotList.find((x) => x.id === c.hid);
   const colG = gSlot ? chipColor(gSlot) : groupColor(gid), colH = hSlot ? chipColor(hSlot) : groupColor(c.hid);
-  const key = [g.url, h.url, c.a, c.side, colG, colH].join('|');
+  const key = [g.url, h.url, c.a, c.side, colG, colH, gridOn].join('|');
   if (drawCache.has(key)) return drawCache.get(key);
 
   const { right, up } = faceAxes(c);
@@ -1597,6 +1604,15 @@ function interfaceDrawing(gid, c) {
     octx.stroke();
     octx.restore();
   };
+  if (gridOn) {   // 5 cm squares, in the template's coordinates
+    octx.save();
+    octx.strokeStyle = 'rgba(30, 35, 42, 0.32)'; octx.lineWidth = 1;
+    octx.beginPath();
+    for (let k = Math.ceil(u0 / GRID_M - 1e-6); k * GRID_M <= u1 + 1e-9; k++) { const x = Math.round(X(k * GRID_M)) + 0.5; octx.moveTo(x, 0); octx.lineTo(x, H); }
+    for (let k = Math.ceil(v0 / GRID_M - 1e-6); k * GRID_M <= v1 + 1e-9; k++) { const y = Math.round(Y(k * GRID_M)) + 0.5; octx.moveTo(0, y); octx.lineTo(W, y); }
+    octx.stroke();
+    octx.restore();
+  }
   strokeEdges(mine.edges, [], 2.6);          // this cube's edges in the plane
   strokeEdges(theirs.edges, [10, 7], 2);     // the neighbour's, dashed
   octx.strokeStyle = '#1e232a'; octx.lineWidth = 2; octx.strokeRect(1, 1, W - 2, H - 2);
@@ -1699,7 +1715,7 @@ function renderInterfaces() {
     const voidG = d.open + d.hOnly, voidH = d.open + d.gOnly;
     html += `<h3>${faceTitle(c)} face of ${esc(nameG)} ↔ ${SIDE_NAMES[c.a][1 - c.side]} face of ${esc(nameH)}</h3>
       <div class="detail">
-        <figure class="drawing"><figcaption>Seen from ${esc(nameH)} · ${fmtLen(d.w)} × ${fmtLen(d.h)} · solid line ${esc(nameG)}, dashed ${esc(nameH)}</figcaption></figure>
+        <figure class="drawing"><figcaption>Seen from ${esc(nameH)} · ${fmtLen(d.w)} × ${fmtLen(d.h)} · solid line ${esc(nameG)}, dashed ${esc(nameH)}${gridOn ? ' · grid 5 cm' : ''}</figcaption></figure>
         <div class="big"><div><b>${fmtM2(d.touch)}</b><span><i class="key touch"></i>${pct(d.touch, d.face)} · solid surface touching</span></div>
           <div><b>${fmtM2(d.open)}</b><span><i class="key open"></i>${pct(d.open, d.face)} · voids connect</span></div></div>
       </div>
@@ -2099,6 +2115,7 @@ setAnimals(animalsOn);
 // the cube, and it fades to plain colour in the distance instead of shimmering.
 const ROCK_TILE_M = 0.16;     // one repeat of the pattern, in metres (grains ≈ 4 mm and 2 mm)
 const ROCK_RELIEF_M = 0.004;  // how deep the grains look, in metres
+const SNAP_M = 0.8;           // pattern origins snap to this: a whole number of rock repeats and grid squares
 const rockUniforms = {
   rockMap: { value: new THREE.DataTexture(new Uint8Array([255, 255, 255, 128]), 1, 1) },
   rockOn: { value: 0 },
@@ -2112,6 +2129,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
     shader.uniforms.rockOn = rockUniforms.rockOn;
     shader.uniforms.rockRelief = rockUniforms.rockRelief;
     shader.uniforms.sectionOn = sectionUniform;
+    shader.uniforms.gridOn = gridUniform;
     shader.uniforms.rockScale = { value: metresPerUnit / ROCK_TILE_M };
     shader.uniforms.rockMetres = { value: metresPerUnit };
     shader.uniforms.rockOrigin = { value: origin };
@@ -2126,6 +2144,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
         uniform float rockMetres;
         uniform float rockRelief;
         uniform float sectionOn;
+        uniform float gridOn;
         varying vec3 vRockPos;
         varying vec3 vRockNormal;
         varying float vRockZ;
@@ -2153,6 +2172,19 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
         }
 `)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        // 5 cm grid in the template's coordinates: lines where the surface crosses a multiple of 5 cm
+        // (not along the face's own direction), faded out where the squares get too small to read
+        if (gridOn > 0.5) {
+          vec3 gc = vRockPos * rockMetres / ${GRID_M.toFixed(3)};
+          vec3 gw = fwidth(gc);
+          vec3 gd = abs(fract(gc - 0.5) - 0.5) / max(gw, vec3(1e-6));
+          vec3 gl = (1.0 - min(gd, 1.0)) * (1.0 - smoothstep(0.55, 0.85, abs(normalize(vRockNormal))))
+            * (1.0 - smoothstep(0.12, 0.3, gw));
+          float line = max(gl.x, max(gl.y, gl.z));
+          vec3 c = gl_FragColor.rgb;
+          vec3 ink = dot(c, vec3(0.299, 0.587, 0.114)) > 0.32 ? c * 0.35 : mix(c, vec3(1.0), 0.65);
+          gl_FragColor.rgb = mix(c, ink, line * 0.75);
+        }
         // inside faces seen through a cut (only where a model isn't closed; elsewhere the section caps
         // cover them): the same flat poché grey as the caps, without light or texture
         if (sectionOn > 0.5 && !gl_FrontFacing) gl_FragColor = vec4(0.361, 0.380, 0.408, 1.0);`)
@@ -2252,24 +2284,46 @@ const guides = new THREE.Group();
 // Section caps: the solid grey where a plane cuts through material. For each plane, every cube is drawn
 // twice into the stencil buffer only (inside faces add one, outside faces subtract one, clipped by that
 // plane), which leaves a non-zero count wherever the plane runs through solid; a flat grey quad on the
-// plane is then drawn only there (and resets the count). Each cap is clipped by the other planes.
+// plane is then drawn only there (and resets the count). This happens cube by cube, so each cube's cap
+// carries that cube's own grid, wherever the view has moved it. Each cap is clipped by the other planes.
 const POCHE = '#5c6168';
 const stencilMats = cutPlanes.map((plane) => [THREE.BackSide, THREE.FrontSide].map((side) => {
   const op = side === THREE.BackSide ? THREE.IncrementWrapStencilOp : THREE.DecrementWrapStencilOp;
   return new THREE.MeshBasicMaterial({ side, colorWrite: false, depthWrite: false, depthTest: false, clippingPlanes: [plane],
     stencilWrite: true, stencilFunc: THREE.AlwaysStencilFunc, stencilFail: op, stencilZFail: op, stencilZPass: op });
 }));
-const caps = cutPlanes.map((plane, i) => {
-  const cap = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({
-    color: POCHE, side: THREE.DoubleSide, clippingPlanes: cutPlanes.filter((p) => p !== plane),
+const capGeo = new THREE.PlaneGeometry(1, 1);
+const capLayer = new THREE.Group();
+scene.add(capLayer);
+function makeCap(i) {
+  const plane = cutPlanes[i];
+  const mat = new THREE.MeshBasicMaterial({ color: POCHE, side: THREE.DoubleSide, clippingPlanes: cutPlanes.filter((p) => p !== plane),
     stencilWrite: true, stencilRef: 0, stencilFunc: THREE.NotEqualStencilFunc,
-    stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp }));
-  cap.renderOrder = i + 1.1;   // after that plane's stencil passes (renderOrder i + 1)
+    stencilFail: THREE.ReplaceStencilOp, stencilZFail: THREE.ReplaceStencilOp, stencilZPass: THREE.ReplaceStencilOp });
+  const ref = gridRefUniforms();
+  gridify(mat, ref, new THREE.Vector3(1, 1, 1).setComponent(i, 0), [0.62, 0.65, 0.69], 0.8);
+  const cap = new THREE.Mesh(capGeo, mat);
+  cap.userData = { plane: i, ref };
   cap.visible = false;
+  cap.frustumCulled = false;
   cap.onAfterRender = (r) => r.clearStencil();
-  scene.add(cap);
   return cap;
-});
+}
+const capsFor = (b) => (b.holder.userData.caps ||= [0, 1, 2].map(makeCap));
+// Every frame while cutting: each cube's caps sit on the planes around the cube, where it is right now.
+const Z_UP = new THREE.Vector3(0, 0, 1);
+function placeCaps() {
+  for (const cap of capLayer.children) {
+    const { block: b, plane: a, ref } = cap.userData, h = b.holder;
+    cap.visible = cuts[a].on && h.visible;
+    if (!cap.visible) continue;
+    cutPlanes[a].projectPoint(h.position, cap.position);
+    cap.quaternion.setFromUnitVectors(Z_UP, cutPlanes[a].normal);
+    const size = Math.max(b.size.length(), 1e-3) * h.scale.x * 1.2;
+    cap.scale.set(size, size, 1);
+    setGridRef(ref, b);
+  }
+}
 // The stencil copies of a model live next to it in its holder (not inside it), so nothing that walks a
 // model's meshes (card, interfaces, animals, clicks) ever sees them.
 const stencilGroups = new WeakMap();
@@ -2294,13 +2348,17 @@ function stencilGroupFor(raw) {
   return g;
 }
 function syncStencil(active) {
-  for (const b of Object.values(blocks)) {
+  capLayer.clear();
+  Object.values(blocks).forEach((b, k) => {
     for (const child of [...b.holder.children]) if (child.userData.stencilOf && (!active || child.userData.stencilOf !== b.raw)) b.holder.remove(child);
-    if (!active || !b.raw) continue;
+    if (!active || !b.raw) return;
     const g = stencilGroupFor(b.raw);
     if (g.parent !== b.holder) b.holder.add(g);
-    for (const copy of g.children) copy.visible = cuts[copy.userData.plane].on;
-  }
+    // per plane: this cube's stencil passes, then its cap, then the next cube's
+    for (const copy of g.children) { copy.visible = cuts[copy.userData.plane].on; copy.renderOrder = copy.userData.plane + 1 + k * 0.01; }
+    capsFor(b).forEach((cap, a) => { cap.renderOrder = a + 1.005 + k * 0.01; cap.userData.block = b; capLayer.add(cap); });
+  });
+  placeCaps();
 }
 scene.add(guides);
 function updateCuts() {
@@ -2323,14 +2381,6 @@ function updateCuts() {
   });
   const active = sectionOn && cuts.some((c) => c.on);
   sectionUniform.value = active ? 1 : 0;
-  const centre = box.getCenter(new THREE.Vector3()), size = box.getSize(new THREE.Vector3()).length() * 3;
-  caps.forEach((cap, a) => {
-    cap.visible = active && cuts[a].on;
-    if (!cap.visible) return;
-    cutPlanes[a].projectPoint(centre, cap.position);
-    cap.quaternion.setFromUnitVectors(new THREE.Vector3(0, 0, 1), cutPlanes[a].normal);
-    cap.scale.set(size, size, 1);
-  });
   syncStencil(active);
 }
 const keptBySection = (p) => cutPlanes.every((pl) => pl.distanceToPoint(p) >= 0);
@@ -2363,6 +2413,94 @@ cuts.forEach((c, a) => {
   document.getElementById(`cut-${a}-flip`).onclick = () => { c.flip = !c.flip; c.on = true; renderSection(); updateCuts(); };
 });
 btnSection.onclick = () => setSection(!sectionOn);
+
+// ---------- reference grid (G): 5 × 5 cm squares in the template's coordinates, on the cubes (see
+// rockify), on the ground, on the section caps and in the interface drawings. The ground and the caps
+// work out template coordinates from where a cube is right now: template = (world − holder) / scale +
+// the cube's centre (less a snapped origin, to keep the numbers small).
+function gridRefUniforms() {
+  return { gridPos: { value: new THREE.Vector3() }, gridScale: { value: 1 }, gridShift: { value: new THREE.Vector3() } };
+}
+const snapShift = (v, out) => out.set(v.x - Math.round(v.x / SNAP_M) * SNAP_M, v.y - Math.round(v.y / SNAP_M) * SNAP_M, v.z - Math.round(v.z / SNAP_M) * SNAP_M);
+function setGridRef(ref, b) {
+  if (!b) { ref.gridPos.value.set(0, 0, 0); ref.gridScale.value = 1; ref.gridShift.value.set(0, 0, 0); return; }
+  ref.gridPos.value.copy(b.holder.position);
+  ref.gridScale.value = Math.max(b.holder.scale.x, 1e-6);
+  snapShift(b.center, ref.gridShift.value);
+}
+const GRID_GLSL = `
+  uniform float gridOn;
+  uniform vec3 gridPos;
+  uniform float gridScale;
+  uniform vec3 gridShift;
+  uniform vec3 gridMask;
+  varying vec3 vGridWorld;
+  // how much of a 5 cm grid line covers this pixel (axes switched off in gridMask don't count)
+  float gridLine() {
+    vec3 gc = ((vGridWorld - gridPos) / gridScale + gridShift) / ${GRID_M.toFixed(3)};
+    vec3 gw = fwidth(gc);
+    vec3 gd = abs(fract(gc - 0.5) - 0.5) / max(gw, vec3(1e-6));
+    vec3 gl = (1.0 - min(gd, 1.0)) * gridMask * (1.0 - smoothstep(0.12, 0.3, gw));
+    return max(gl.x, max(gl.y, gl.z));
+  }`;
+// Grid lines in `color` (sRGB) over a built-in material, e.g. the section caps.
+function gridify(mat, ref, mask, color, strength) {
+  mat.onBeforeCompile = (shader) => {
+    Object.assign(shader.uniforms, ref, { gridOn: gridUniform, gridMask: { value: mask }, gridInk: { value: new THREE.Vector3(...color) },
+      gridStrength: { value: strength } });
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGridWorld;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvGridWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>${GRID_GLSL}\nuniform vec3 gridInk;\nuniform float gridStrength;`)
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        if (gridOn > 0.5) gl_FragColor.rgb = mix(gl_FragColor.rgb, gridInk, gridLine() * gridStrength);`);
+  };
+  mat.customProgramCacheKey = () => 'grid';
+}
+// The ground grid: lined up with the selected cube (in Combined, with all of them), fading out around the model.
+const groundRef = gridRefUniforms();
+const groundGrid = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.ShaderMaterial({
+  uniforms: { ...groundRef, gridOn: { value: 1 }, gridMask: { value: new THREE.Vector3(1, 1, 0) },
+    gridCentre: { value: new THREE.Vector2() }, gridRadius: { value: 1 } },
+  vertexShader: `varying vec3 vGridWorld;
+    void main() { vec4 w = modelMatrix * vec4(position, 1.0); vGridWorld = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+  fragmentShader: `${GRID_GLSL}
+    uniform vec2 gridCentre;
+    uniform float gridRadius;
+    void main() {
+      float fade = 1.0 - smoothstep(gridRadius * 0.55, gridRadius, distance(vGridWorld.xy, gridCentre));
+      float a = gridLine() * 0.3 * fade;
+      if (a < 0.004) discard;
+      gl_FragColor = vec4(0.118, 0.137, 0.165, a);
+    }`,
+  transparent: true, depthWrite: false, side: THREE.DoubleSide,
+}));
+groundGrid.renderOrder = 1;   // over the matrix tiles
+groundGrid.visible = false;
+scene.add(groundGrid);
+function placeGroundGrid(bounds) {
+  const c = bounds.getCenter(new THREE.Vector3()), size = bounds.getSize(new THREE.Vector3());
+  const r = Math.max(size.x, size.y) / 2 + nominal * 0.8;
+  groundGrid.position.set(c.x, c.y, -Math.min(0.0002, nominal * 0.0005));   // just under the cubes, over the shadows
+  groundGrid.scale.set(r * 2.2, r * 2.2, 1);
+  groundGrid.material.uniforms.gridCentre.value.set(c.x, c.y);
+  groundGrid.material.uniforms.gridRadius.value = r;
+}
+function gridRefBlock() {
+  const s = slotList.find((x) => x.key === selected), b = s && s.id && blocks[s.id];
+  if (b && b.holder.visible && !b.box.isEmpty()) return b;
+  return Object.values(blocks).find((x) => x.holder.visible && !x.box.isEmpty());
+}
+const btnGrid = document.getElementById('btn-grid');
+function setGrid(on) {
+  gridOn = on;
+  gridUniform.value = on ? 1 : 0;
+  groundGrid.visible = on;
+  btnGrid.setAttribute('aria-pressed', on);
+  renderInterfaces();   // the drawings get (or lose) their grid
+}
+btnGrid.onclick = () => setGrid(!gridOn);
 
 // ---------- history bar on/off (H), remembered in this browser
 const btnHistory = document.getElementById('btn-history');
@@ -2665,6 +2803,8 @@ renderer.setAnimationLoop(() => {
     h.visible = h.scale.x > 0.002;
   }
   for (const l of Object.values(labels)) l.position.lerp(l.userData.target, a);
+  if (sectionUniform.value) placeCaps();
+  if (gridOn) setGridRef(groundRef, gridRefBlock());
   const tileGoal = view === 'matrix' ? 1 : 0;
   tileMat.opacity = THREE.MathUtils.lerp(tileMat.opacity, tileGoal, a);
   dashMat.opacity = THREE.MathUtils.lerp(dashMat.opacity, tileGoal * 0.9, a);
@@ -2691,6 +2831,7 @@ applyLight();
 if (rockOn) setRock(true);
 document.getElementById('color-name').textContent = MODE_NAMES[mode];
 setView(view);
+if (gridOn) setGrid(true);
 snapCamera();
 from = view;
 poll();
