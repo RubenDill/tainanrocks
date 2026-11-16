@@ -13,13 +13,19 @@ SET-UP (once)
        auto    Type hint: bool            optional: a Boolean Toggle; publishes whenever G changes,
                                           at most once every 15 seconds
        colour  Type hint: Color           optional: colour of your cube on the screen
+       T       List Access, Type hint: str      optional: text dots to publish with your cube: their texts
+       P       List Access, Type hint: Point3d  optional: ... and where they go (one point per text; with
+                                          fewer points than texts the last point is used again, and the
+                                          other way round)
        server  Type hint: str             optional: overrides SERVER_URL below
        key     Type hint: str             optional: overrides WORKSHOP_KEY below
   4. Rename the output to: status
   5. Optional: right-click the component > "Create User Object..." so it's in your toolbar next time.
 
 Everything in G is published together as your group's cube (as meshes, converted to metres),
-replacing what your group published before, just like the Publish button in Rhino.
+replacing what your group published before, just like the Publish button in Rhino. Text dots go
+along too, like the Publish button's TextDots option: one for every text in T, and any text dots in
+G (referenced from Rhino, or from Rhino 8's Text Dot component). They show on the screen as labels.
 
 Works in Rhino 7 and Rhino 8 (Windows and Mac).
 """
@@ -92,18 +98,69 @@ def to_meshes(geom, mp):
     return [m for m in meshes] if meshes else []
 
 
+def to_metres():
+    doc = Rhino.RhinoDoc.ActiveDoc
+    return rg.Transform.Scale(rg.Point3d.Origin, Rhino.RhinoMath.UnitScale(doc.ModelUnitSystem, Rhino.UnitSystem.Meters))
+
+
+def make_dot(text, point, scale, like=None):
+    """A text dot in metres (keeping the font of `like`, a dot it's copied from)."""
+    dot = rg.TextDot(text, scale * point)
+    if like is not None:
+        try:
+            dot.FontHeight = like.FontHeight
+            dot.FontFace = like.FontFace
+        except Exception:
+            pass
+    return dot
+
+
+def as_point(item):
+    """A Point3d from a point, a wrapped point or a Rhino point object's id, else None."""
+    item = as_geometry(item)
+    if isinstance(item, rg.Point3d):
+        return item
+    if isinstance(item, rg.Point):
+        return item.Location
+    return None
+
+
+def collect_dots(texts, points):
+    """Text dots in metres from T (texts) and P (points), paired up like Grasshopper's longest list.
+    Returns (dots, problem or None)."""
+    texts = [("" if t is None else str(t)) for t in (texts or [])]
+    points = [as_point(p) for p in (points or [])]
+    if any(p is None for p in points):
+        return [], "P should only hold points."
+    if not texts and not points:
+        return [], None
+    if not texts or not points:
+        return [], "Connect both T (the dots' texts) and P (where they go), or neither."
+    scale = to_metres()
+    dots = []
+    for i in range(max(len(texts), len(points))):
+        text = texts[min(i, len(texts) - 1)].strip()
+        if text:
+            dots.append(make_dot(text, points[min(i, len(points) - 1)], scale))
+    return dots, None
+
+
 def collect(items):
-    """All input geometry as meshes in metres. Returns (meshes, skipped count)."""
+    """All input geometry as meshes in metres, and the text dots among it. Returns (meshes, dots, skipped count)."""
     doc = Rhino.RhinoDoc.ActiveDoc
     try:
         mp = doc.GetMeshingParameters(doc.MeshingParameterStyle)
     except Exception:
         mp = rg.MeshingParameters.Default
-    to_m = Rhino.RhinoMath.UnitScale(doc.ModelUnitSystem, Rhino.UnitSystem.Meters)
-    scale = rg.Transform.Scale(rg.Point3d.Origin, to_m)
-    meshes, skipped = [], 0
+    scale = to_metres()
+    meshes, dots, skipped = [], [], 0
     for item in items or []:
-        parts = [m for m in to_meshes(as_geometry(item), mp) if m is not None and m.Faces.Count > 0]
+        geom = as_geometry(item)
+        if isinstance(geom, rg.TextDot):
+            if geom.Text:
+                dots.append(make_dot(geom.Text, geom.Point, scale, like=geom))
+            continue
+        parts = [m for m in to_meshes(geom, mp) if m is not None and m.Faces.Count > 0]
         if not parts:
             skipped += 1
             continue
@@ -112,12 +169,14 @@ def collect(items):
             m.Normals.ComputeNormals()
             m.Compact()
             meshes.append(m)
-    return meshes, skipped
+    return meshes, dots, skipped
 
 
-def fingerprint(meshes, extra):
+def fingerprint(meshes, dots, extra):
     """Cheap signature of the geometry, so auto only publishes when something really changed."""
     out = [extra]
+    for d in dots:
+        out.append("dot %s@%.5f,%.5f,%.5f" % (d.Text, d.Point.X, d.Point.Y, d.Point.Z))
     for m in meshes:
         b = m.GetBoundingBox(False)
         out.append("%d/%d/%.5f,%.5f,%.5f,%.5f,%.5f,%.5f" % (m.Vertices.Count, m.Faces.Count,
@@ -125,7 +184,7 @@ def fingerprint(meshes, extra):
     return "|".join(out)
 
 
-def write_3dm(meshes, colour, group):
+def write_3dm(meshes, dots, colour, group):
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
     for m in meshes:
@@ -134,6 +193,11 @@ def write_3dm(meshes, colour, group):
             attr.ColorSource = Rhino.DocObjects.ObjectColorSource.ColorFromObject
             attr.ObjectColor = colour
         f.Objects.AddMesh(m, attr)
+    for d in dots:     # no colour of their own: the screen draws them as dark tags
+        try:
+            f.Objects.AddTextDot(d, Rhino.DocObjects.ObjectAttributes())
+        except Exception:
+            f.Objects.AddTextDot(d.Text, d.Point)
     path = os.path.join(System.IO.Path.GetTempPath(), "workshoplive_gh_group%d.3dm" % group)
     if not f.Write(path, 7):
         raise Exception("could not write the temporary file %s" % path)
@@ -160,11 +224,11 @@ def http_post(url, data, key):
         return status, System.IO.StreamReader(ex.Response.GetResponseStream()).ReadToEnd()
 
 
-def publish(meshes, group, colour, server, key):
+def publish(meshes, dots, group, colour, server, key):
     """Returns (ok, message)."""
     if "your-project" in server.lower():
         return False, "Set SERVER_URL at the top of the script (or connect the server input)."
-    path = write_3dm(meshes, colour, group)
+    path = write_3dm(meshes, dots, colour, group)
     size = os.path.getsize(path)
     if size > MAX_BYTES:
         return False, "Group %d's geometry is %.1f MB; the limit is 4 MB. Simplify it and push again." % (group, size / 1048576.0)
@@ -174,7 +238,8 @@ def publish(meshes, group, colour, server, key):
     except Exception:
         result = {"error": body[:200]}
     if status == 200 and result.get("ok"):
-        return True, "Published Group %d at %s (%.2f MB)." % (group, time.strftime("%H:%M:%S"), size / 1048576.0)
+        extra = ", %d text dot%s" % (len(dots), "" if len(dots) == 1 else "s") if dots else ""
+        return True, "Published Group %d at %s (%.2f MB%s)." % (group, time.strftime("%H:%M:%S"), size / 1048576.0, extra)
     return False, "Publish failed (%s): %s" % (status, result.get("error", "unknown error"))
 
 
@@ -201,9 +266,13 @@ server_url = str(inp("server", SERVER_URL) or SERVER_URL)
 workshop_key = str(inp("key", WORKSHOP_KEY) or WORKSHOP_KEY)
 ghenv.Component.Message = "Group %d" % group_number if 1 <= group_number <= GROUPS else "no group"
 
-meshes, skipped = collect(inp("G", []))
+meshes, g_dots, skipped = collect(inp("G", []))
 if skipped:
-    warn("%d item(s) in G aren't surfaces, polysurfaces, meshes or SubDs and were left out." % skipped)
+    warn("%d item(s) in G aren't surfaces, polysurfaces, meshes, SubDs or text dots and were left out." % skipped)
+t_dots, dot_problem = collect_dots(inp("T", []), inp("P", []))
+if dot_problem:
+    warn(dot_problem)
+dots = g_dots + t_dots
 
 if not 1 <= group_number <= GROUPS:
     warn("Set group to your group number (1-%d)." % GROUPS, error=True)
@@ -211,7 +280,7 @@ if not 1 <= group_number <= GROUPS:
 elif not meshes:
     status = "Connect your cube (Breps, meshes or SubDs) to G."
 else:
-    signature = fingerprint(meshes, "%d|%s" % (group_number, colour_value))
+    signature = fingerprint(meshes, dots, "%d|%s" % (group_number, colour_value))
     wanted = bool(inp("push", False))
     if not wanted and inp("auto", False) and signature != memory["fingerprint"]:
         wait = AUTO_EVERY_S - (time.time() - memory["time"])
@@ -222,7 +291,7 @@ else:
             run_again_in(wait)
     if wanted:
         try:
-            ok, message = publish(meshes, group_number, colour_value, server_url, workshop_key)
+            ok, message = publish(meshes, dots, group_number, colour_value, server_url, workshop_key)
         except Exception as ex:
             ok, message = False, "Publish failed: %s" % ex
         memory["time"] = time.time()
