@@ -344,16 +344,15 @@
   </header>
   <div class="controls">
     <div class="views" role="tablist" aria-label="View">
-      <button role="tab" data-view="combined"><kbd>1</kbd>Combined</button>
-      <button role="tab" data-view="exploded"><kbd>2</kbd>Exploded</button>
-      <button role="tab" data-view="single"><kbd>3</kbd>One by one</button>
-      <button role="tab" data-view="matrix"><kbd>4</kbd>Matrix</button>
-      <button role="tab" data-view="interfaces"><kbd>5</kbd>Interfaces</button>
+      <button role="tab" data-view="single"><kbd>1</kbd>One by one</button>
+      <button role="tab" data-view="matrix"><kbd>2</kbd>Matrix</button>
+      <button role="tab" data-view="combined"><kbd>3</kbd>Combined</button>
+      <button role="tab" data-view="interfaces"><kbd>4</kbd>Interfaces</button>
     </div>
-    <div class="context" id="ctx-exploded" hidden>
+    <div class="context" id="ctx-combined" hidden>
       <label for="separation">Separation</label>
-      <input id="separation" type="range" min="0" max="3" step="0.05" value="1">
-      <output id="separation-value" for="separation">1.0×</output>
+      <input id="separation" type="range" min="0" max="3" step="0.05" value="0">
+      <output id="separation-value" for="separation">0.0×</output>
     </div>
     <div class="context" id="ctx-single" hidden>
       <button class="step" id="prev" aria-label="Previous group" title="Previous group (←)">‹</button>
@@ -482,14 +481,14 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
 import rhino3dm from 'rhino3dm';
 
-// ---------- settings (URL parameters, e.g. ?title=Studio%20B&groups=8&explode=1.5&view=matrix&poll=5)
+// ---------- settings (URL parameters, e.g. ?title=Studio%20B&groups=8&explode=1.5&view=combined&poll=5)
 const params = new URLSearchParams(location.search);
 const TITLE = params.get('title') || 'Tainan Rocks';
 const POLL_MS = Math.max(3, Number(params.get('poll')) || 5) * 1000;
 const GROUPS = Math.max(1, Math.min(24, Math.round(Number(params.get('groups'))) || 8));
 const STATE_URL = params.get('api') || '/api/state';
 const FRESH_MS = 90 * 1000;
-const VIEWS = ['combined', 'exploded', 'single', 'matrix', 'interfaces'];
+const VIEWS = ['single', 'matrix', 'combined', 'interfaces'];   // the tabs, in order (keys 1-4)
 const num = (k, d) => (params.has(k) && Number.isFinite(Number(params.get(k))) ? Number(params.get(k)) : d);
 // Sun: Tainan by default. ?lat=&lon=&tz=&place= for elsewhere; ?north= (degrees, counter-clockwise)
 // if north in the Rhino model isn't +Y; ?sun=1&day=172&time=15:00 to start with the sun on.
@@ -524,12 +523,17 @@ function textOn(color) {
 }
 
 // ---------- state
+// Combined has a separation slider (`explode`: 0 = the pieces together, 1 = each moved its own
+// distance from the centre again). The old Exploded view is Combined pulled apart, so links to
+// it (#exploded, ?view=exploded) open Combined at 1× unless ?explode= says otherwise.
 let view = VIEWS.includes(params.get('view')) ? params.get('view') : 'combined';
 let selected = '1';          // slot key shown in "One by one"
-let explode = params.has('explode') ? Math.max(0, Math.min(3, Number(params.get('explode')) || 0)) : 1;
+let explode = params.has('explode') ? Math.max(0, Math.min(3, Number(params.get('explode')) || 0)) : 0;
 {
   const [v, g] = location.hash.slice(1).split('-');
-  if (VIEWS.includes(v)) view = v;
+  const wasExploded = v === 'exploded' || params.get('view') === 'exploded';
+  if (wasExploded) { view = 'combined'; if (!params.has('explode')) explode = 1; }
+  else if (VIEWS.includes(v)) view = v;
   if (g) selected = decodeURIComponent(g);
 }
 const blocks = {};           // id -> { url, raw, holder, box, center, size, modelColor, publishedAt }
@@ -1044,7 +1048,7 @@ function layout() {
   for (const s of placed) combined.union(blocks[s.id].box);
   const cc = combined.isEmpty() ? new THREE.Vector3() : combined.getCenter(new THREE.Vector3());
   const base = new THREE.Vector3(cc.x, cc.y, combined.isEmpty() ? 0 : combined.min.z);
-  // Exploded: push each piece away from the centre by `explode` × its distance, then put the lowest back on the ground.
+  // Separation (Combined's slider): push each piece away from the centre by `explode` × its distance, then put the lowest back on the ground.
   let lift = 0;
   if (placed.length) {
     lift = Infinity;
@@ -1089,7 +1093,7 @@ function layout() {
       const half = b.size.z / 2;
       const inCombined = b.center.clone().sub(base);
       let target = inCombined, scale = 1;
-      if (view === 'exploded') { target = inCombined.clone().addScaledVector(b.center.clone().sub(cc), explode); target.z += lift; }
+      if (view === 'combined' && explode > 0) { target = inCombined.clone().addScaledVector(b.center.clone().sub(cc), explode); target.z += lift; }
       else if (view === 'matrix') target = c.clone().setZ(half);
       else if (view === 'single') { if (s.key === selected) target = new THREE.Vector3(0, 0, half); else scale = 0; }
       else if (view === 'interfaces') { if (ifaceAt[s.id]) target = ifaceAt[s.id]; else scale = 0; }
@@ -1097,7 +1101,7 @@ function layout() {
       h.target.copy(target); h.scale = scale;
       if (h.snap) { b.holder.position.copy(target); h.snap = false; }
       if (scale) bounds.union(new THREE.Box3().setFromCenterAndSize(target, b.size));
-      if (view === 'exploded' || (view === 'interfaces' && scale)) {
+      if ((view === 'combined' && explode >= 0.05) || (view === 'interfaces' && scale)) {   // labels once pulled apart
         label.userData.target.copy(target).setZ(target.z + half + nominal * 0.08); label.center.set(0.5, 1); show = true;
       }
     }
@@ -1199,7 +1203,7 @@ addEventListener('resize', () => { resize(); frame(layout()); });
 
 // ---------- views and selection
 const tabs = [...document.querySelectorAll('.views button')];
-const ctxExploded = document.getElementById('ctx-exploded');
+const ctxCombined = document.getElementById('ctx-combined');
 const ctxSingle = document.getElementById('ctx-single');
 const slider = document.getElementById('separation');
 const sliderOut = document.getElementById('separation-value');
@@ -1216,7 +1220,7 @@ function setView(v, opts = {}) {
     if (cardFor) cardFor = opts.group;   // the open card follows the group being shown
   }
   for (const t of tabs) t.setAttribute('aria-selected', t.dataset.view === view);
-  ctxExploded.hidden = view !== 'exploded';
+  ctxCombined.hidden = view !== 'combined';
   ctxSingle.hidden = view !== 'single' && view !== 'interfaces';
   sheetEl.hidden = view !== 'interfaces';
   if (view === 'interfaces') faceSel = opts.face ?? 0;
@@ -1482,7 +1486,7 @@ addEventListener('keydown', (e) => {
   if (e.target === tlPlot && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); stepHistory(e.key === 'ArrowLeft' ? -1 : 1); return; }
   const k = e.key.toLowerCase();
   const inGroup = view === 'single' || view === 'interfaces';
-  if (k >= '1' && k <= '5' && k.length === 1) setView(VIEWS[Number(k) - 1]);
+  if (k >= '1' && k <= String(VIEWS.length) && k.length === 1) setView(VIEWS[Number(k) - 1]);
   else if (k === 'arrowright') step(inGroup ? 1 : 0);
   else if (k === 'arrowleft') step(inGroup ? -1 : 0);
   else if (k === '[') stepHistory(-1);

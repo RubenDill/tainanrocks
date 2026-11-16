@@ -1,11 +1,10 @@
 # Workshop Live
 
-Each group designs one piece (a cube) in Rhino and presses **Publish**. The class screen picks up new models by itself within about a minute, or straight away when you press **Update**, and has five views; the pieces glide between them:
+Each group designs one piece (a cube) in Rhino and presses **Publish**. The class screen picks up new models by itself within about a minute, or straight away when you press **Update**, and has four views; the pieces glide between them:
 
-- **Combined**: all pieces together at their real Rhino coordinates (e.g. eight cubes forming one 2×2×2 cube)
-- **Exploded**: the same, with every piece pushed away from the centre; a slider sets the separation
 - **One by one**: one group's piece on its own; step through the groups with ‹ › or the arrow keys
-- **Matrix**: every group's piece side by side in a grid, with empty spots for groups that haven't published
+- **Matrix**: every group's piece side by side in a grid, each with its label on top, with empty spots for groups that haven't published
+- **Combined**: all pieces together at their real Rhino coordinates (e.g. eight cubes forming one 2×2×2 cube); the **Separation** slider pushes every piece away from the centre, with its label on top once they're apart
 - **Interfaces**: a group's cube with the cubes it touches, pulled apart, with each shared face drawn in the gap; click a face to see in 2D where the cubes touch and where their voids connect, with the areas
 
 Every publish is kept, so the **timeline** can step back through the session, version by version, or replay it. **Sun** (S) lights the model with the real sun for any date and time in Tainan, with long shadows, the sun's path and a compass. **Animals** (A) brings the structure to life with chibi Taiwanese wildlife.
@@ -21,7 +20,7 @@ Grasshopper (optional) ◀────────  /api/state  (WorkshopPull.py
 
 | Path | What it is |
 |---|---|
-| `public/index.html` | The class-screen viewer: Combined, Exploded, One by one and Matrix views, plus a status chip per group |
+| `public/index.html` | The class-screen viewer: One by one, Matrix, Combined and Interfaces views, plus a status chip per group |
 | `api/publish.js` | Receives uploads from Rhino (and lets you remove a group or clear everything) |
 | `api/state.js` | Tells viewers which groups have published and where their files are |
 | `lib/manifest.js` | Shared storage logic |
@@ -74,7 +73,7 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 
 | Key | Does |
 |---|---|
-| **1** **2** **3** **4** **5** | Combined / Exploded / One by one / Matrix / Interfaces |
+| **1** **2** **3** **4** | One by one / Matrix / Combined / Interfaces |
 | **←** **→** | Previous / next group (opens One by one) |
 | **[** **]** | Previous / next update on the timeline |
 | **S** | Sun on/off |
@@ -107,7 +106,7 @@ Clicking a group chip at the bottom left opens that group in One by one with its
 
 **Rock** (T) shows the cubes as coarse, 3D-printed sand-stone: rounded grains of about 4 and 2 mm with relief that catches the light (bump mapping), soft lumps and faint horizontal print layers every 6 mm. It's generated in the browser (no image files, about half a second the first time), is fixed to each cube, and fades to plain colour in the distance rather than shimmering. Edge lines are hidden while it's on. Together with the white model it's plain pinkish-grey stone; with group colours each cube is a tinted stone.
 
-The address keeps the current view, so you can bookmark one: `…/#matrix`, `…/#exploded`, `…/#single-3`, `…/#interfaces-3`.
+The address keeps the current view, so you can bookmark one: `…/#matrix`, `…/#combined`, `…/#single-3`, `…/#interfaces-3`. Old `…/#exploded` links open Combined pulled apart (1×).
 
 **Timeline.** The bar above the group chips has a row for every group and a dot, in the group's colour, for every publish. **Day** shows one day at a time (‹ › next to the date move between days that have updates); **All time** shows the whole session. Click or drag on the chart to go back to that moment: the red line marks it, later updates fade, and a ring marks the version each group is showing. Or use ‹ › or **[** **]**, or press ▶ to replay one update per second (in Day, that day's updates). Everything follows the point in time you pick, the interface drawings included; the status line says you're looking back. **● Live** returns to the newest version of every group. It starts hidden: **H** (or the Timeline button) opens it and × hides it again; the browser remembers which. The server keeps the last 100 versions per group.
 
@@ -123,7 +122,7 @@ The address keeps the current view, so you can bookmark one: `…/#matrix`, `…
 
 A solid line shows this cube's edges in the plane, a dashed line the neighbour's. Next to it are the areas in m² and as a share of the shared face: solid surface touching, voids connecting, each one-sided area, and how much of each cube's voids on that face open into the other's. Areas are counted on a fine raster (about 0.6 mm per pixel on a 0.45 m face). Faces count as touching when the cubes' bounding boxes sit within 3% of a cube's size of each other. **Print** prints the selected face's drawing and numbers.
 
-URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` the starting separation (1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone, `?grid=1` with the reference grid on, `?labels=1` with the group labels on, `?negative=1` with the negative space on, `?timeline=1` with the timeline open (labels and timeline start off). Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
+URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` Combined's starting separation (0 = together, the default; 1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone, `?grid=1` with the reference grid on, `?labels=1` with the group labels on, `?negative=1` with the negative space on, `?timeline=1` with the timeline open (labels and timeline start off). Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
 
 ## Publishing from Grasshopper
 
