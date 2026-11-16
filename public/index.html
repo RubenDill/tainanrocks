@@ -1614,8 +1614,11 @@ function openAreas(mask, W, H, minPx) {
   return out;
 }
 const rgbBytes = (css) => { const n = new THREE.Color(css).getHex(); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
+// A shared face is always drawn from the same side, whichever of its two groups is selected, so it
+// never flips: faces across x seen from the west, across y from the south, horizontal ones from above.
+const SEEN_FROM = ['the west', 'the south', 'above'];
 function faceAxes(c) {
-  const forward = new THREE.Vector3().setComponent(c.a, c.side ? -1 : 1);   // looking at the face from the neighbour
+  const forward = new THREE.Vector3().setComponent(c.a, c.a === 2 ? -1 : 1);
   const up = c.a === 2 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(0, 0, 1);
   return { right: new THREE.Vector3().crossVectors(forward, up), up };
 }
@@ -1803,7 +1806,7 @@ function renderInterfaces() {
     const voidG = d.open + d.hOnly, voidH = d.open + d.gOnly;   // each side's open area on this face
     html += `<h3>${faceTitle(c)} face ↔ ${esc(nameH)}</h3>
       <div class="detail">
-        <figure class="drawing"><figcaption>Seen from ${esc(nameH)} · ${fmtLen(d.w)} × ${fmtLen(d.h)}${gridOn ? ' · grid 5&nbsp;cm' : ''}</figcaption></figure>
+        <figure class="drawing"><figcaption>Seen from ${SEEN_FROM[c.a]} · ${fmtLen(d.w)} × ${fmtLen(d.h)}${gridOn ? ' · grid 5&nbsp;cm' : ''}</figcaption></figure>
         <div class="stats">
           <div class="hero"><span class="what"><i class="key open"></i>Voids connect</span><b>${pct(d.open, d.face)}</b><small>of the face · ${fmtM2(d.open)}</small></div>
           <div class="share"><div><b>${pct(d.open, voidG)}</b><span>of ${esc(nameG)}'s voids</span></div>
