@@ -62,6 +62,7 @@ Grasshopper (optional) ◀────────  /api/state  (WorkshopPull.py
 3. Click it. The first time it asks which group you are (it remembers this in the Rhino file). Then **select your cube**: one object, and only that object is published. Next time, **Enter** publishes the same object again. Click **Group** on the command line to change the number.
 4. Optional: click **PublishOnSave** on the command line to turn it **On**. Every Ctrl+S then publishes the object you published last. After restarting Rhino, click the button once to re-arm it.
 5. Optional: click **TextDots** on the command line to turn it **On**. The text dots on your cube are then published with it, and show on the screen as labels (Rhino: *Dot* command). A dot counts as on your cube when it sits inside the cube's bounding box or up to 3 cm outside it; dots inside a block you publish count too. Hidden dots and dots on hidden layers stay out. The setting is saved in the file, like the group number.
+6. Optional: click **NegativeSpace** on the command line and select the objects that cut your cube's voids (the cutters you used in BooleanDifference: run it with *DeleteInput=No* to keep them). From then on they're published with your cube, meshed, on a layer of their own, and the screen can show them very ghosted (**N**). The choice is saved in the file, so you can hide the cutters afterwards and Enter and PublishOnSave still send them. Click **NegativeSpace** again and press Enter without selecting anything to stop.
 
 What gets published: **only the one object you select**, so whatever else is in your file stays out. Your cube therefore has to be one object: join its parts into one polysurface or mesh (Join or BooleanUnion), or make a block of them. Surfaces, polysurfaces, extrusions, SubDs, meshes and blocks work; curves, points and text don't. Locked objects can't be selected, so unlock your cube first. Text dots only go along with the **TextDots** option (see above). Cubes over 4 MB are refused with a message saying so.
 
@@ -85,6 +86,7 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 | **G** | 5 × 5 cm reference grid |
 | **Esc** | Close the cube's card |
 | **L** | Group labels and text dots |
+| **N** | Negative space: the objects that cut the voids, very ghosted |
 | **F** | Fit the view |
 | **P** | Fullscreen with only the model (Esc to come back) |
 | **H** | Show or hide the timeline |
@@ -94,6 +96,8 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 **Click a cube** for its card: size, volume, void (share of its bounding box left empty), estimated weight in concrete (2.4 t/m³), surface area, which cubes it touches and over how much area, triangle count and file size, plus buttons for One by one and Interfaces. The card also **downloads the published .3dm files**: this version, all versions of the group (zip), or every group as shown (zip; when you're looking back on the timeline, the versions of that moment). These are the files the Publish button sent, so meshes in metres, not the students' working files. Volume needs a closed model; otherwise the card says so. Clicking empty space or **Esc** closes it.
 
 **Text dots** that a group published with its cube (the **TextDots** option) float on it like Rhino's own dots: dark tags (in the dot's own colour with model colours), always on top and the same size on screen in every view. They move with the cube, are cut away by a section, and **L** hides them together with the group labels.
+
+**Negative space** (N, in the Display menu) shows the objects a group published as its negative space (the **NegativeSpace** option): the shapes that cut the cube's voids, very ghosted in a pale tint of the group colour with faint edges, where they were in Rhino. They're never part of the cube: size, volume, voids, interfaces, sections, the grid and clicking only count the cube itself. Off when the page opens (`?negative=1` starts with it on).
 
 Clicking a group chip at the bottom left opens that group in One by one with its card. Each chip shows when the group last published; a dot marks the ones published in the last 90 seconds.
 
@@ -119,7 +123,7 @@ The address keeps the current view, so you can bookmark one: `…/#matrix`, `…
 
 A solid line shows this cube's edges in the plane, a dashed line the neighbour's. Next to it are the areas in m² and as a share of the shared face: solid surface touching, voids connecting, each one-sided area, and how much of each cube's voids on that face open into the other's. Areas are counted on a fine raster (about 0.6 mm per pixel on a 0.45 m face). Faces count as touching when the cubes' bounding boxes sit within 3% of a cube's size of each other. **Print** prints the selected face's drawing and numbers.
 
-URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` the starting separation (1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone, `?grid=1` with the reference grid on, `?labels=1` with the group labels on, `?timeline=1` with the timeline open (labels and timeline start off). Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
+URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` the starting separation (1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone, `?grid=1` with the reference grid on, `?labels=1` with the group labels on, `?negative=1` with the negative space on, `?timeline=1` with the timeline open (labels and timeline start off). Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
 
 ## Publishing from Grasshopper
 
@@ -136,6 +140,7 @@ URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh
    | `auto` | bool, optional | a **Boolean Toggle**: publishes whenever the geometry changes, at most once every 15 s (the last change is always sent) |
    | `colour` | Color, optional | the cube's colour on the screen; without it the group colour is used |
    | `dots` | List Access, Guid, optional | text dots to publish with the cube, as **points referenced from Rhino** (a *Point* parameter → *Set Multiple Points*): each point's **name** (Rhino: *Properties → Name*) is the dot's text |
+   | `negative` | List Access, GeometryBase, optional | the objects that cut the cube's voids: published with it as **negative space** (like the Publish button's **NegativeSpace** option), which the screen can show very ghosted (**N**) |
    | `server`, `key` | str, optional | override `SERVER_URL` / `WORKSHOP_KEY` |
 
 3. Rename the output to `status`: it says what happened. The component shows the group number underneath and turns orange or red when something needs attention.
@@ -162,6 +167,7 @@ Geometry is meshed with the file's render-mesh settings and converted to metres,
    | `edges` | bool | `False` turns the edge lines off (on by default) |
    | `shading` | bool | `False` draws the cubes in flat colour, without light (shaded by default) |
    | `dots` | bool | `False` hides the text dots published with the cubes (shown by default) |
+   | `negative` | bool | `True` shows the published negative space, very ghosted (off by default, like on the screen) |
    | `server` | str | overrides `SERVER_URL` |
 
 3. Outputs: `M` (the meshes, one branch per group: `{1}`, `{2}`, …), `C` (one colour per branch), `G` (the group number of each branch) and `status`.

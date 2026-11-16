@@ -432,6 +432,7 @@
           <button id="btn-grid" aria-pressed="false" title="5 × 5 cm reference grid on the cubes, the ground, the cuts and the drawings (G)"><kbd>G</kbd> Grid</button>
           <button id="btn-section" aria-pressed="false" title="Cut the model with planes along X, Y and Z (X)"><kbd>X</kbd> Section</button>
           <button id="btn-labels" aria-pressed="false" title="Show group labels and text dots (L)"><kbd>L</kbd> Labels</button>
+          <button id="btn-negative" aria-pressed="false" title="Show, ghosted, the objects that cut each cube's voids (N)"><kbd>N</kbd> Negative space</button>
           <button id="btn-fit" data-close title="Frame the view (F)"><kbd>F</kbd> Fit</button>
         </div>
       </div>
@@ -649,7 +650,7 @@ function chipColor(slot) {
   return colorFor(slot.id, b.modelColor);
 }
 function recolor() {
-  for (const [id, b] of Object.entries(blocks)) paint(id, b.raw);
+  for (const [id, b] of Object.entries(blocks)) paint(id, b.raw, b.ghost);
   document.getElementById('color-name').textContent = MODE_NAMES[mode];
   layout();
   renderGroups();
@@ -690,8 +691,22 @@ async function buildGroup(id, url) {
   const doc = rhino.File3dm.fromByteArray(new Uint8Array(await res.arrayBuffer()));
   const scale = UNIT_TO_M[enumValue(doc.settings().modelUnitSystem)] ?? 1;
   const group = new THREE.Group();
+  const ghost = new THREE.Group();   // negative space: kept apart, so it never counts as the cube
   const dots = [];   // text dots, made into sprites once the model's box is measured
   let firstColor;
+
+  function addGhost(rmesh, modelColor) {
+    const g = jsonLoader.parse(rmesh.toThreejsJSON());
+    if (!g.attributes.normal) g.computeVertexNormals();
+    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: ghostColor(id, modelColor), transparent: true,
+      opacity: GHOST_OPACITY, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: cutPlanes }));
+    mesh.userData.modelColor = modelColor;
+    mesh.renderOrder = 5;     // after the cubes, so they show through it
+    ghost.add(mesh);
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 28), ghostEdgeMat);
+    edges.renderOrder = 5;
+    ghost.add(edges);
+  }
 
   function addMesh(rmesh, modelColor) {
     const g = jsonLoader.parse(rmesh.toThreejsJSON());
@@ -721,15 +736,19 @@ async function buildGroup(id, url) {
     const attrs = obj.attributes();
     const modelColor = modelColorOf(doc, attrs);
     const type = geo.objectType;
+    const negative = isNegative(doc, attrs);
+    const add = negative ? addGhost : addMesh;
     try {
       if (type === rhino.ObjectType.Mesh) {
-        addMesh(geo, modelColor);
+        add(geo, modelColor);
       } else if (type === rhino.ObjectType.Extrusion) {
         const m = geo.getMesh(rhino.MeshType.Any); // only there if Rhino saved render meshes
-        if (m) addMesh(m, modelColor);
+        if (m) add(m, modelColor);
       } else if (type === rhino.ObjectType.Brep) {
         const faces = geo.faces();
-        for (let f = 0; f < faces.count; f++) { const m = faces.get(f).getMesh(rhino.MeshType.Any); if (m) addMesh(m, modelColor); }
+        for (let f = 0; f < faces.count; f++) { const m = faces.get(f).getMesh(rhino.MeshType.Any); if (m) add(m, modelColor); }
+      } else if (negative) {
+        // only surfaces and meshes show as negative space
       } else if (type === rhino.ObjectType.Curve) {
         const pts = [];
         if (typeof geo.point === 'function' && geo.pointCount > 1) {
@@ -751,7 +770,8 @@ async function buildGroup(id, url) {
   doc.delete?.();
   group.scale.setScalar(scale);
   group.updateMatrixWorld(true);
-  return { raw: group, modelColor: firstColor ?? null, dots };
+  ghost.scale.setScalar(scale);
+  return { raw: group, modelColor: firstColor ?? null, dots, ghost: ghost.children.length ? ghost : null };
 }
 
 // ---------- versions
@@ -761,14 +781,15 @@ const groupVersions = {};   // id -> [{ url, size, publishedAt }]
 const modelCache = {};      // url -> Promise<{ raw, box, center, size, modelColor }>
 function loadModel(id, url) {
   if (!modelCache[url]) {
-    const p = buildGroup(id, url).then(({ raw, modelColor, dots }) => {
+    const p = buildGroup(id, url).then(({ raw, modelColor, dots, ghost }) => {
       const box = new THREE.Box3().setFromObject(raw);
       const center = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
       const size = box.isEmpty() ? new THREE.Vector3() : box.getSize(new THREE.Vector3());
       raw.position.copy(center).negate();   // hang the model around its centre inside the holder
       const cage = box.isEmpty() ? null : makeCage(box, center);   // the grid on its six planes
       for (const d of dots || []) raw.add(makeDot(d));   // after the box, so dots never change its size
-      return { raw, box, center, size, modelColor, cage };
+      if (ghost) { ghost.position.copy(raw.position); ghost.visible = negativeOn; ghostGroups.add(ghost); }
+      return { raw, box, center, size, modelColor, cage, ghost };
     });
     p.catch(() => { if (modelCache[url] === p) delete modelCache[url]; });
     modelCache[url] = p;
@@ -780,6 +801,10 @@ function disposeModel(url) {
   delete modelCache[url];
   p?.then((m) => {
     m.cage?.geometry.dispose();
+    if (m.ghost) {
+      ghostGroups.delete(m.ghost);
+      m.ghost.traverse((o) => { o.geometry?.dispose(); if (o.material && o.material !== ghostEdgeMat) o.material.dispose(); });
+    }
     m.raw.traverse((o) => {
       if (o.isSprite) { o.material.map?.dispose(); o.material.dispose(); dotSprites.delete(o); return; }   // shares three's quad
       o.geometry?.dispose();
@@ -787,12 +812,43 @@ function disposeModel(url) {
     });
   }, () => {});
 }
-function paint(id, raw) {
+function paint(id, raw, ghost) {
   raw.traverse((o) => {
     if (o.isMesh) o.material.color.copy(surfaceColor(id, o.userData.modelColor));
     else if (o.userData.dot) drawDot(o);
   });
+  ghost?.traverse((o) => { if (o.isMesh) o.material.color.set(ghostColor(id, o.userData.modelColor)); });
 }
+
+// ---------- negative space (N): the objects that cut each cube's voids, published with the cube
+// (the NegativeSpace option) on their own layer. Very ghosted, never part of the cube: they hang in
+// their own group next to it, so the volume, voids, interfaces, sections and clicks ignore them.
+const NEGATIVE_LAYER = 'Negative space';
+const GHOST_OPACITY = 0.12;
+const ghostEdgeMat = new THREE.LineBasicMaterial({ color: '#1e232a', transparent: true, opacity: 0.2, depthWrite: false,
+  clippingPlanes: cutPlanes });
+const ghostGroups = new Set();
+let negativeOn = params.get('negative') === '1';
+function isNegative(doc, attrs) {
+  try {
+    if (attrs.getUserString?.('workshoplive') === 'negative') return true;
+    const layer = doc.layers().get(attrs.layerIndex);
+    const name = layer?.name;
+    layer?.delete?.();
+    return name === NEGATIVE_LAYER;
+  } catch { return false; }
+}
+// The cube's colour, halfway to white: a pale tint of it.
+function ghostColor(id, modelColor) {
+  return new THREE.Color(colorFor(id, modelColor)).lerp(new THREE.Color('#ffffff'), 0.5);
+}
+function setNegative(on) {
+  negativeOn = on;
+  for (const g of ghostGroups) g.visible = on;
+  document.getElementById('btn-negative').setAttribute('aria-pressed', on);
+}
+document.getElementById('btn-negative').onclick = () => setNegative(!negativeOn);
+setNegative(negativeOn);
 
 // ---------- text dots (published with the TextDots option): drawn like Rhino's, on top of everything
 // and the same size on screen whatever the model's units or the view. L shows and hides them with
@@ -867,19 +923,22 @@ function showModel(id, m, idx) {
   if (b.raw !== m.raw) {
     if (b.raw) b.holder.remove(b.raw);
     if (b.cage) b.holder.remove(b.cage);
-    paint(id, m.raw);
+    if (b.ghost) b.holder.remove(b.ghost);
+    paint(id, m.raw, m.ghost);
     b.holder.add(m.raw);
     if (m.cage) b.holder.add(m.cage);
+    if (m.ghost) b.holder.add(m.ghost);
   }
   const v = groupVersions[id][idx];
   Object.assign(b, { url: v.url, publishedAt: v.publishedAt, version: idx, versionCount: groupVersions[id].length,
-    raw: m.raw, cage: m.cage, box: m.box, center: m.center, size: m.size, modelColor: m.modelColor });
+    raw: m.raw, cage: m.cage, ghost: m.ghost, box: m.box, center: m.center, size: m.size, modelColor: m.modelColor });
 }
 function hideBlock(id) {
   const b = blocks[id];
   if (!b) return;
   if (b.raw) b.holder.remove(b.raw);
   if (b.cage) b.holder.remove(b.cage);
+  if (b.ghost) b.holder.remove(b.ghost);
   scene.remove(b.holder);
   delete blocks[id];
 }
@@ -1442,6 +1501,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'r') setRotate(!rotateWanted);
   else if (k === 'c') nextMode();
   else if (k === 'l') btnLabels.click();
+  else if (k === 'n') setNegative(!negativeOn);
   else if (k === 'f') frame();
   else if (k === 'u') poll(true);
 });

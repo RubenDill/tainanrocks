@@ -16,6 +16,9 @@ SET-UP (once)
        dots    List Access, Type hint: Guid     optional: text dots to publish with your cube, as points
                                           referenced from Rhino (a Point parameter > Set Multiple Points);
                                           each point's Name (Rhino: Properties > Name) is the dot's text
+       negative  List Access, Type hint: GeometryBase  optional: the objects that cut your cube's voids;
+                                          published with it as negative space, which the class
+                                          screen can show very ghosted (N)
        server  Type hint: str             optional: overrides SERVER_URL below
        key     Type hint: str             optional: overrides WORKSHOP_KEY below
   4. Rename the output to: status
@@ -49,6 +52,8 @@ WORKSHOP_KEY = "blocks-2026"
 # ---------------------------------------------------------------------------
 
 GROUPS = 8
+NEGATIVE_LAYER = "Negative space"   # the class screen shows what's on this layer ghosted, never as the cube
+NEGATIVE_TAG = ("workshoplive", "negative")   # ... and anything with this user text
 DOT_INK = System.Drawing.Color.FromArgb(0x1e, 0x23, 0x2a)          # dark tags, like on the class screen
 NO_NAME = System.Drawing.Color.FromArgb(0xe0, 0x8a, 0x1c)          # a point that still needs a name
 MAX_BYTES = 4 * 1024 * 1024
@@ -244,9 +249,27 @@ def fingerprint(meshes, dots, extra):
     return "|".join(out)
 
 
-def write_3dm(meshes, dots, colour, group):
+def negative_layer(f):
+    """The index of the negative-space layer in the file being written."""
+    try:
+        return f.AllLayers.AddLayer(NEGATIVE_LAYER, System.Drawing.Color.FromArgb(160, 160, 160))
+    except Exception:
+        layer = Rhino.DocObjects.Layer()
+        layer.Name = NEGATIVE_LAYER
+        f.AllLayers.Add(layer)
+        return f.AllLayers.Count - 1
+
+
+def write_3dm(meshes, dots, colour, group, ghosts=()):
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
+    if ghosts:
+        layer = negative_layer(f)
+        for m in ghosts:
+            attr = Rhino.DocObjects.ObjectAttributes()
+            attr.LayerIndex = layer
+            attr.SetUserString(NEGATIVE_TAG[0], NEGATIVE_TAG[1])
+            f.Objects.AddMesh(m, attr)
     for m in meshes:
         attr = Rhino.DocObjects.ObjectAttributes()
         if colour is not None:
@@ -284,11 +307,11 @@ def http_post(url, data, key):
         return status, System.IO.StreamReader(ex.Response.GetResponseStream()).ReadToEnd()
 
 
-def publish(meshes, dots, group, colour, server, key):
+def publish(meshes, dots, ghosts, group, colour, server, key):
     """Returns (ok, message)."""
     if "your-project" in server.lower():
         return False, "Set SERVER_URL at the top of the script (or connect the server input)."
-    path = write_3dm(meshes, dots, colour, group)
+    path = write_3dm(meshes, dots, colour, group, ghosts)
     size = os.path.getsize(path)
     if size > MAX_BYTES:
         return False, "Group %d's geometry is %.1f MB; the limit is 4 MB. Simplify it and push again." % (group, size / 1048576.0)
@@ -299,6 +322,8 @@ def publish(meshes, dots, group, colour, server, key):
         result = {"error": body[:200]}
     if status == 200 and result.get("ok"):
         extra = ", %d text dot%s" % (len(dots), "" if len(dots) == 1 else "s") if dots else ""
+        if ghosts:
+            extra += ", negative space"
         return True, "Published Group %d at %s (%.2f MB%s)." % (group, time.strftime("%H:%M:%S"), size / 1048576.0, extra)
     return False, "Publish failed (%s): %s" % (status, result.get("error", "unknown error"))
 
@@ -327,6 +352,9 @@ workshop_key = str(inp("key", WORKSHOP_KEY) or WORKSHOP_KEY)
 ghenv.Component.Message = "Group %d" % group_number if 1 <= group_number <= GROUPS else "no group"
 
 meshes, g_dots, skipped = collect(inp("G", []))
+ghosts, _, ghost_skipped = collect(inp("negative", []))
+if ghost_skipped:
+    warn("%d item(s) in negative aren't surfaces, polysurfaces, meshes or SubDs and were left out." % ghost_skipped)
 if skipped:
     warn("%d item(s) in G aren't surfaces, polysurfaces, meshes, SubDs or text dots and were left out." % skipped)
 memory.setdefault("preview", [])
@@ -351,7 +379,7 @@ if not 1 <= group_number <= GROUPS:
 elif not meshes:
     status = "Connect your cube (Breps, meshes or SubDs) to G."
 else:
-    signature = fingerprint(meshes, dots, "%d|%s" % (group_number, colour_value))
+    signature = fingerprint(meshes + ghosts, dots, "%d|%s|%d" % (group_number, colour_value, len(ghosts)))
     wanted = bool(inp("push", False))
     if not wanted and inp("auto", False) and signature != memory["fingerprint"]:
         wait = AUTO_EVERY_S - (time.time() - memory["time"])
@@ -362,7 +390,7 @@ else:
             run_again_in(wait)
     if wanted:
         try:
-            ok, message = publish(meshes, dots, group_number, colour_value, server_url, workshop_key)
+            ok, message = publish(meshes, dots, ghosts, group_number, colour_value, server_url, workshop_key)
         except Exception as ex:
             ok, message = False, "Publish failed: %s" % ex
         memory["time"] = time.time()

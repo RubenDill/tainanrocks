@@ -19,6 +19,8 @@ SET-UP (once)
        edges    Type hint: bool   optional: False turns the edge lines off (they're on by default)
        shading  Type hint: bool   optional: False draws the cubes in flat colour, without light
        dots     Type hint: bool   optional: False hides the text dots groups published with their cube
+       negative Type hint: bool   optional: True shows, very ghosted, the objects that cut each cube's
+                                  voids (published as negative space); off by default
        server   Type hint: str    overrides SERVER_URL below
   4. Set up the outputs:
        M       the meshes, one branch per group ({1}, {2}, ...), already coloured
@@ -73,6 +75,10 @@ CREASE_DEG = 28        # an edge is drawn where the faces meet at more than this
 EDGE_THICKNESS = 1     # pixels, like the screen's WebGL lines
 DOT_INK = "#1e232a"    # text dots: dark tags, like on the class screen
 SHADE_GLOW = 0.25      # share of the colour that shows even where no light falls
+NEGATIVE_LAYER = "Negative space"   # negative space: on this layer, or tagged with this user text
+NEGATIVE_TAG = ("workshoplive", "negative")
+GHOST_TRANSPARENCY = 0.88           # very ghosted, like the class screen (12% opaque)
+CACHE_VERSION = 2                   # versions loaded by an earlier script are loaded again
 
 
 def inp(name, default=None):
@@ -209,8 +215,9 @@ def as_mesh(geom):
 
 
 def load_model(url):
-    """Download one published .3dm. Returns (parts, dots): [(mesh in this file's units, published
-    colour or None)] and [(point in this file's units, text, published colour or None)]."""
+    """Download one published .3dm. Returns (parts, dots, ghosts): [(mesh in this file's units,
+    published colour or None)], [(point in this file's units, text, published colour or None)] and
+    the negative space, like the parts."""
     f = read_3dm(http_get(url))
     if f is None:
         raise Exception("not a readable .3dm file")
@@ -220,10 +227,11 @@ def load_model(url):
     doc = Rhino.RhinoDoc.ActiveDoc
     scale = Rhino.RhinoMath.UnitScale(units, doc.ModelUnitSystem) if doc is not None else 1.0
     xform = rg.Transform.Scale(rg.Point3d.Origin, scale)
-    parts, dots = [], []
+    parts, dots, ghosts = [], [], []
     for obj in f.Objects:
+        negative = is_negative(f, obj.Attributes)
         if isinstance(obj.Geometry, rg.TextDot):
-            if obj.Geometry.Text:
+            if obj.Geometry.Text and not negative:
                 dots.append((xform * obj.Geometry.Point, obj.Geometry.Text, object_colour(f, obj.Attributes)))
             continue
         mesh = as_mesh(obj.Geometry)
@@ -232,8 +240,19 @@ def load_model(url):
         if abs(scale - 1.0) > 1e-12:
             mesh.Transform(xform)
         mesh.Normals.ComputeNormals()
-        parts.append((mesh, object_colour(f, obj.Attributes)))
-    return parts, dots
+        (ghosts if negative else parts).append((mesh, object_colour(f, obj.Attributes)))
+    return parts, dots, ghosts
+
+
+def is_negative(f, attrs):
+    """Whether an object was published as negative space (never part of the cube)."""
+    try:
+        if attrs.GetUserString(NEGATIVE_TAG[0]) == NEGATIVE_TAG[1]:
+            return True
+        layer = f.AllLayers.FindIndex(attrs.LayerIndex)
+        return layer is not None and layer.Name == NEGATIVE_LAYER
+    except Exception:
+        return False
 
 
 def local_time(iso):
@@ -258,18 +277,18 @@ def check_server(memory, server):
         if not url or entry.get("hidden"):
             continue    # hidden from the class screen, so hidden here too
         old = memory["blocks"].get(key)
-        if old is not None and old["url"] == url:
+        if old is not None and old["url"] == url and old.get("v") == CACHE_VERSION:
             blocks[key] = old
             continue
         try:
-            parts, dots = load_model(url)
+            parts, dots, ghosts = load_model(url)
         except Exception as ex:
             problems.append("Group %s: download failed (%s)" % (key, ex))
             if old is not None:
                 blocks[key] = old       # keep showing the version we had
             continue
-        blocks[key] = {"url": url, "parts": parts, "dots": dots, "publishedAt": entry.get("publishedAt", ""),
-                       "size": entry.get("size") or 0}
+        blocks[key] = {"url": url, "parts": parts, "dots": dots, "ghosts": ghosts, "v": CACHE_VERSION,
+                       "publishedAt": entry.get("publishedAt", ""), "size": entry.get("size") or 0}
     memory["blocks"] = blocks
     return problems
 
@@ -339,6 +358,29 @@ def shaded_material(colour):
     return _materials[key]
 
 
+def ghost_material(colour):
+    """Negative space: the colour, very see-through, no shine."""
+    key = ("ghost", colour.ToArgb())
+    if key not in _materials:
+        m = Rhino.Display.DisplayMaterial(colour, GHOST_TRANSPARENCY)
+        try:
+            m.IsTwoSided = True
+            for side in ("", "Back"):
+                setattr(m, side + "Specular", System.Drawing.Color.Black)
+                setattr(m, side + "Shine", 0.0)
+                setattr(m, side + "Transparency", GHOST_TRANSPARENCY)
+        except Exception:
+            pass
+        _materials[key] = m
+    return _materials[key]
+
+
+def pale(colour, t=0.5):
+    """The colour, `t` of the way to white."""
+    mix = lambda v: int(round(v + (255 - v) * t))
+    return System.Drawing.Color.FromArgb(mix(colour.R), mix(colour.G), mix(colour.B))
+
+
 def hide_grasshopper_preview(name):
     """Stop Grasshopper drawing an output itself (it draws coloured meshes flat, without light), so
     this component's shaded drawing is the only one. Returns False if that can't be done."""
@@ -375,12 +417,13 @@ def install_drawing(memory):
 
     def draw(sender, e):
         try:
-            if not (memory["draw"] or memory.get("dots")) or not previewing(component):
+            if not (memory["draw"] or memory.get("dots") or memory.get("ghosts")) or not previewing(component):
                 return
             for mesh, material, lines, ink in memory["draw"]:   # all surfaces first, then all lines
                 if mesh is not None:
                     e.Display.DrawMeshShaded(mesh, material)
-            for mesh, material, lines, ink in memory["draw"]:
+            ghosts = memory.get("ghosts") or []
+            for mesh, material, lines, ink in memory["draw"] + ghosts:
                 if lines is None:
                     continue
                 try:
@@ -388,6 +431,8 @@ def install_drawing(memory):
                 except Exception:
                     for line in lines:
                         e.Display.DrawLine(line, ink, EDGE_THICKNESS)
+            for mesh, material, lines, ink in ghosts:   # see-through, so after everything solid
+                e.Display.DrawMeshShaded(mesh, material)
             for point, text, back, fore in memory.get("dots") or []:   # always on top, like Rhino's dots
                 e.Display.DrawDot(point, text, back, fore)
         except Exception:
@@ -395,7 +440,7 @@ def install_drawing(memory):
 
     def bounds(sender, e):
         try:   # so Rhino's near and far clipping planes leave room for the cubes
-            if memory.get("bbox") is not None and (memory["draw"] or memory.get("dots")) and previewing(component):
+            if memory.get("bbox") is not None and (memory["draw"] or memory.get("dots") or memory.get("ghosts")) and previewing(component):
                 e.IncludeBoundingBox(memory["bbox"])
         except Exception:
             pass
@@ -435,6 +480,7 @@ except (TypeError, ValueError):
 auto_on = bool(inp("auto", False))
 edges_on = bool(inp("edges", True))
 dots_on = bool(inp("dots", True))
+negative_on = bool(inp("negative", False))
 shading_on = bool(inp("shading", True)) and hide_grasshopper_preview("M")
 if not shading_on:
     for param in ghenv.Component.Params.Output:
@@ -488,6 +534,7 @@ C, G = [], []
 lines = []
 draw = []
 dots = []
+ghost_draw = []
 bbox = None     # of everything drawn (a .NET struct, so it's replaced, never changed in place)
 keys = sorted(memory["blocks"].keys(), key=sort_key)
 hidden_here = [key for key in keys if group_number(key) in hide]
@@ -518,6 +565,18 @@ for i, key in enumerate(keys):
             bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
         elif edge_lines is not None:
             draw.append((None, None, edge_lines, edge_colour(colour)))
+    if negative_on and block.get("ghosts"):
+        if "ghost_edges" not in block:
+            block["ghost_edges"] = [crease_lines(mesh) for mesh, published in block["ghosts"]]
+        for (mesh, published), edge_lines in zip(block["ghosts"], block["ghost_edges"]):
+            colour = fallback
+            if mode == "model" and published is not None and not is_black(published):
+                colour = published
+            tint = pale(colour)
+            ghost_draw.append((mesh, ghost_material(tint), edge_lines if edge_lines.Length else None,
+                               pale(edge_colour(tint), 0.6)))
+            box = mesh.GetBoundingBox(False)
+            bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
     block_dots = block.get("dots") or []      # versions loaded by an earlier script have none
     if dots_on:
         for point, text, published in block_dots:
@@ -533,6 +592,7 @@ for i, key in enumerate(keys):
 
 memory["draw"] = draw
 memory["dots"] = dots
+memory["ghosts"] = ghost_draw
 memory["bbox"] = bbox
 install_drawing(memory)
 

@@ -21,6 +21,12 @@ cube along with it (dots within its bounding box, or up to 3 cm outside it, and
 dots that are part of it when it's a block). They show on the class screen as
 labels.
 
+"NegativeSpace" lets you pick the objects that cut your cube's voids (the
+cutters of a BooleanDifference, say). They're published with every publish
+after that, on a layer of their own, and the class screen can show them very
+ghosted (N). They can be hidden in Rhino once picked; pick again with nothing
+selected (Enter) to stop publishing them.
+
 Each group publishes as its number ("1".."8"), which is the group chip with
 the same number on the class screen. Geometry is converted to meters, so
 files in millimetres or centimetres line up with everyone else's.
@@ -46,6 +52,8 @@ STICKY_HANDLER = "workshoplive_publish_on_save"
 MAX_BYTES = 4 * 1024 * 1024
 MAX_DEPTH = 8  # nested block definitions
 DOT_MARGIN_M = 0.03   # text dots this far outside the cube's bounding box still count as on it
+NEGATIVE_LAYER = "Negative space"   # the class screen shows what's on this layer ghosted, never as the cube
+NEGATIVE_TAG = ("workshoplive", "negative")   # ... and anything with this user text
 
 
 # ---------------------------------------------------------------- settings
@@ -86,6 +94,49 @@ def saved_object(doc):
     except Exception:
         return None
     return obj if obj is not None and not obj.IsDeleted else None
+
+
+def saved_negative(doc):
+    """The objects picked as negative space that still exist (hidden ones too), and how many are gone."""
+    found, gone = [], 0
+    for value in (get_setting(doc, "negative") or "").split(","):
+        if not value.strip():
+            continue
+        try:
+            obj = doc.Objects.FindId(System.Guid.Parse(value.strip()))
+        except Exception:
+            obj = None
+        if obj is None or obj.IsDeleted:
+            gone += 1
+        else:
+            found.append(obj)
+    return found, gone
+
+
+def pick_negative(doc):
+    """Ask for the objects that cut the cube's voids and save them in the file. Enter = none."""
+    go = Rhino.Input.Custom.GetObject()
+    go.SetCommandPrompt("Select the objects that cut your cube's voids (Enter = none)")
+    go.GeometryFilter = (Rhino.DocObjects.ObjectType.Surface | Rhino.DocObjects.ObjectType.PolysrfFilter |
+                         Rhino.DocObjects.ObjectType.Mesh | Rhino.DocObjects.ObjectType.Extrusion |
+                         Rhino.DocObjects.ObjectType.SubD | Rhino.DocObjects.ObjectType.InstanceReference)
+    go.EnablePreSelect(False, True)
+    go.SubObjectSelect = False
+    go.GroupSelect = True
+    go.AcceptNothing(True)
+    res = go.GetMultiple(1, 0)
+    if res == Rhino.Input.GetResult.Nothing:
+        ids = []
+    elif res == Rhino.Input.GetResult.Object:
+        ids = [str(go.Object(i).ObjectId) for i in range(go.ObjectCount)]
+    else:
+        return   # Escape: keep what was there
+    set_setting(doc, "negative", ",".join(ids))
+    doc.Objects.UnselectAll()
+    doc.Views.Redraw()
+    Rhino.RhinoApp.WriteLine("Workshop Live: %s." % (
+        "%d object%s published as negative space from now on" % (len(ids), "" if len(ids) == 1 else "s")
+        if ids else "no negative space published from now on"))
 
 
 # ---------------------------------------------------------------- geometry
@@ -203,16 +254,42 @@ def add_dot(f, dot, attr):
         return f.Objects.AddTextDot(dot.Text, dot.Point, attr)
 
 
-def build_file(doc, obj, group, with_dots=False):
-    """Write the one selected object, as meshes in metres, to a temporary .3dm (with the text dots on
-    it if with_dots). Returns (path, meshes, dots)."""
+def negative_layer(f):
+    """The index of the negative-space layer in the file being written."""
+    try:
+        return f.AllLayers.AddLayer(NEGATIVE_LAYER, System.Drawing.Color.FromArgb(160, 160, 160))
+    except Exception:
+        layer = Rhino.DocObjects.Layer()
+        layer.Name = NEGATIVE_LAYER
+        f.AllLayers.Add(layer)
+        return f.AllLayers.Count - 1
+
+
+def build_file(doc, obj, group, with_dots=False, negative=()):
+    """Write the one selected object, as meshes in metres, to a temporary .3dm, with the text dots on
+    it if with_dots, and the `negative` objects (meshed) on the negative-space layer. Returns
+    (path, meshes, dots, negative meshes)."""
     to_m = Rhino.RhinoMath.UnitScale(doc.ModelUnitSystem, Rhino.UnitSystem.Meters)
+    to_m_xform = rg.Transform.Scale(rg.Point3d.Origin, to_m)
+    mp = meshing_parameters(doc)
     parts = []
-    collect_meshes(doc, obj.Geometry, rg.Transform.Scale(rg.Point3d.Origin, to_m),
-                   obj.Attributes.DrawColor(doc), meshing_parameters(doc), parts)
+    collect_meshes(doc, obj.Geometry, to_m_xform, obj.Attributes.DrawColor(doc), mp, parts)
     dots = collect_dots(doc, obj, to_m) if with_dots and parts else []
+    ghosts = []
+    for other in negative:
+        if other.Id != obj.Id:
+            collect_meshes(doc, other.Geometry, to_m_xform, other.Attributes.DrawColor(doc), mp, ghosts)
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
+    if ghosts:
+        layer = negative_layer(f)
+        for mesh, color in ghosts:
+            attr = Rhino.DocObjects.ObjectAttributes()
+            attr.LayerIndex = layer
+            attr.ColorSource = Rhino.DocObjects.ObjectColorSource.ColorFromObject
+            attr.ObjectColor = color
+            attr.SetUserString(NEGATIVE_TAG[0], NEGATIVE_TAG[1])
+            f.Objects.AddMesh(mesh, attr)
     for geometry, color in parts + dots:
         attr = Rhino.DocObjects.ObjectAttributes()
         attr.ColorSource = Rhino.DocObjects.ObjectColorSource.ColorFromObject
@@ -224,7 +301,7 @@ def build_file(doc, obj, group, with_dots=False):
     path = os.path.join(System.IO.Path.GetTempPath(), "workshoplive_group%d.3dm" % group)
     if not f.Write(path, 7):
         raise Exception("could not write the temporary file %s" % path)
-    return path, len(parts), len(dots)
+    return path, len(parts), len(dots), len(ghosts)
 
 
 # ---------------------------------------------------------------- network
@@ -256,14 +333,19 @@ def publish(doc, group, obj):
         return False, "The instructor still needs to set SERVER_URL at the top of WorkshopPublish.py."
     Rhino.RhinoApp.WriteLine("Workshop Live: preparing Group %d..." % group)
     with_dots = get_setting(doc, "textdots") == "1"
-    path, meshes, dots = build_file(doc, obj, group, with_dots)
+    negative, gone = saved_negative(doc)
+    if gone:
+        Rhino.RhinoApp.WriteLine("Workshop Live: %d negative-space object%s no longer exist%s and %s left out." % (
+            gone, "" if gone == 1 else "s", "s" if gone == 1 else "", "is" if gone == 1 else "are"))
+    path, meshes, dots, ghosts = build_file(doc, obj, group, with_dots, negative)
     if meshes == 0:
         return False, ("That object can't be published: select your cube itself (a polysurface, surface, "
                        "extrusion, SubD, mesh or block), not a curve, point or text.")
     size = os.path.getsize(path)
     if size > MAX_BYTES:
-        return False, ("Group %d's cube is %.1f MB; the limit is 4 MB. Simplify very smooth surfaces "
-                       "or fine detail and publish again." % (group, size / 1048576.0))
+        return False, ("Group %d's cube%s is %.1f MB; the limit is 4 MB. Simplify very smooth surfaces "
+                       "or fine detail and publish again." % (group, " with its negative space" if ghosts else "",
+                                                             size / 1048576.0))
 
     data = System.IO.File.ReadAllBytes(path)
     url = "%s/api/publish?block=%d" % (SERVER_URL.rstrip("/"), group)
@@ -278,6 +360,8 @@ def publish(doc, group, obj):
         extra = ", %d groups on the screen" % on_screen if on_screen else ""
         if with_dots:
             extra = ", %d text dot%s%s" % (dots, "" if dots == 1 else "s", extra)
+        if negative:
+            extra = ", negative space%s" % extra
         return True, "Published Group %d to the class screen (%.2f MB%s)." % (group, size / 1048576.0, extra)
     return False, "Publish failed (%s): %s" % (status, result.get("error", "unknown error"))
 
@@ -343,8 +427,10 @@ def main():
         with_dots = Rhino.Input.Custom.OptionToggle(get_setting(doc, "textdots") == "1", "Off", "On")
         number = Rhino.Input.Custom.OptionInteger(group, 1, GROUPS)
         go = Rhino.Input.Custom.GetObject()
-        go.SetCommandPrompt("Select your cube to publish as Group %d%s" % (
-            group, " (Enter = the same object as last time)" if last else ""))
+        negative, _ = saved_negative(doc)
+        go.SetCommandPrompt("Select your cube to publish as Group %d%s%s" % (
+            group, " (Enter = the same object as last time)" if last else "",
+            ", with %d negative-space object%s" % (len(negative), "" if len(negative) == 1 else "s") if negative else ""))
         go.EnablePreSelect(False, True)
         go.SubObjectSelect = False
         go.GroupSelect = False
@@ -352,6 +438,7 @@ def main():
         opt_group = go.AddOptionInteger("Group", number)
         opt_auto = go.AddOptionToggle("PublishOnSave", auto)
         opt_dots = go.AddOptionToggle("TextDots", with_dots)
+        opt_negative = go.AddOption("NegativeSpace")
         res = go.Get()   # Get (not GetMultiple): exactly one object
 
         if res == Rhino.Input.GetResult.Option:
@@ -367,6 +454,8 @@ def main():
                 set_setting(doc, "textdots", "1" if with_dots.CurrentValue else "0")
                 Rhino.RhinoApp.WriteLine("Workshop Live: text dots on your cube are %s." % (
                     "published with it" if with_dots.CurrentValue else "left out"))
+            elif go.OptionIndex() == opt_negative:
+                pick_negative(doc)
             continue
         if res == Rhino.Input.GetResult.Nothing and last is not None:
             obj = last
