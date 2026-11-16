@@ -1809,8 +1809,8 @@ function renderInterfaces() {
           <div class="share"><div><b>${pct(d.open, voidG)}</b><span>of ${esc(nameG)}'s voids</span></div>
             <div><b>${pct(d.open, voidH)}</b><span>of ${esc(nameH)}'s voids</span></div></div>
           <ul class="legend">
-            <li><span><i class="key" style="--c:${esc(d.colH)}"></i>Only ${esc(nameG)} open</span><span>${pct(d.hOnly, d.face)}</span></li>
-            <li><span><i class="key" style="--c:${esc(d.colG)}"></i>Only ${esc(nameH)} open</span><span>${pct(d.gOnly, d.face)}</span></li>
+            <li><span><i class="key" style="--c:${esc(d.colH)}"></i>${esc(nameG)} voids</span><span>${pct(d.hOnly, d.face)}</span></li>
+            <li><span><i class="key" style="--c:${esc(d.colG)}"></i>${esc(nameH)} voids</span><span>${pct(d.gOnly, d.face)}</span></li>
             <li><span><i class="key touch"></i>Solid touch</span><span>${pct(d.touch, d.face)}</span></li>
           </ul>
         </div>
