@@ -413,7 +413,7 @@
         <button id="btn-fit" title="Frame the view (F)"><kbd>F</kbd> Fit</button>
         <button id="btn-present" title="Fullscreen with only the model; Esc to come back (P)"><kbd>P</kbd> Fullscreen</button>
         <button id="btn-section" aria-pressed="false" title="Cut the model with planes along X, Y and Z (X)"><kbd>X</kbd> Section</button>
-        <button id="btn-labels" aria-pressed="true" title="Show group labels (L)"><kbd>L</kbd> Labels</button>
+        <button id="btn-labels" aria-pressed="false" title="Show group labels (L)"><kbd>L</kbd> Labels</button>
       </div></div>
       <div class="kgroup" role="group" aria-labelledby="kg-env"><span class="kname" id="kg-env">Environment</span><div class="kbtns">
         <button id="btn-sun" aria-pressed="false" title="Sunlight for a date and time (S)"><kbd>S</kbd> Sun</button>
@@ -421,7 +421,7 @@
       </div></div>
       <div class="kgroup" role="group" aria-labelledby="kg-manage"><span class="kname" id="kg-manage">Manage</span><div class="kbtns">
         <button id="btn-manage" title="Every published file: show, hide or delete versions (M)"><kbd>M</kbd> File viewer</button>
-        <button id="btn-history" aria-pressed="true" title="Show or hide the timeline (H)"><kbd>H</kbd> Timeline</button>
+        <button id="btn-history" aria-pressed="false" title="Show or hide the timeline (H)"><kbd>H</kbd> Timeline</button>
         <button id="btn-update" title="Load the newest models now, without waiting for the cache (U)"><kbd>U</kbd> <span>Update</span></button>
       </div></div>
     </div>
@@ -1299,6 +1299,7 @@ function setLabels(on) { document.body.classList.toggle('hide-labels', !on); btn
 function nextMode() { mode = MODES[(MODES.indexOf(mode) + 1) % MODES.length]; recolor(); }
 btnRotate.onclick = () => setRotate(!rotateWanted);
 btnLabels.onclick = () => setLabels(btnLabels.getAttribute('aria-pressed') !== 'true');
+setLabels(params.get('labels') === '1');   // off unless asked for
 document.getElementById('btn-color').onclick = nextMode;
 document.getElementById('btn-fit').onclick = () => frame();
 btnUpdate.onclick = () => poll(true);
@@ -2767,7 +2768,8 @@ btnGrid.onclick = () => setGrid(!gridOn);
 
 // ---------- timeline on/off (H), remembered in this browser
 const btnHistory = document.getElementById('btn-history');
-let historyShown = (() => { try { return localStorage.getItem('tainanrocks.history') !== 'hidden'; } catch { return true; } })();
+// off unless ?timeline=1 or this browser last had it on
+let historyShown = params.get('timeline') === '1' || (() => { try { return localStorage.getItem('tainanrocks.history') === 'shown'; } catch { return false; } })();
 function setHistoryShown(on) {
   historyShown = on;
   try { localStorage.setItem('tainanrocks.history', on ? 'shown' : 'hidden'); } catch { /* private mode: just this visit */ }
