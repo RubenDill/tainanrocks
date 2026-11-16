@@ -1605,11 +1605,13 @@ function interfaceDrawing(gid, c) {
     octx.restore();
   };
   if (gridOn) {   // 5 cm squares, in the template's coordinates
+    // The canvas is shown (and printed) at ~250–500 px wide, so the lines are ~3 canvas px: a 1 px line
+    // vanishes for every other square when the browser shrinks the canvas, making the grid look 10 cm.
     octx.save();
-    octx.strokeStyle = 'rgba(30, 35, 42, 0.32)'; octx.lineWidth = 1;
+    octx.strokeStyle = 'rgba(30, 35, 42, 0.3)'; octx.lineWidth = 3;
     octx.beginPath();
-    for (let k = Math.ceil(u0 / GRID_M - 1e-6); k * GRID_M <= u1 + 1e-9; k++) { const x = Math.round(X(k * GRID_M)) + 0.5; octx.moveTo(x, 0); octx.lineTo(x, H); }
-    for (let k = Math.ceil(v0 / GRID_M - 1e-6); k * GRID_M <= v1 + 1e-9; k++) { const y = Math.round(Y(k * GRID_M)) + 0.5; octx.moveTo(0, y); octx.lineTo(W, y); }
+    for (let k = Math.ceil(u0 / GRID_M - 1e-6); k * GRID_M <= u1 + 1e-9; k++) { const x = X(k * GRID_M); octx.moveTo(x, 0); octx.lineTo(x, H); }
+    for (let k = Math.ceil(v0 / GRID_M - 1e-6); k * GRID_M <= v1 + 1e-9; k++) { const y = Y(k * GRID_M); octx.moveTo(0, y); octx.lineTo(W, y); }
     octx.stroke();
     octx.restore();
   }
