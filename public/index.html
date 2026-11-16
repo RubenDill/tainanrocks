@@ -1590,6 +1590,29 @@ function faceRect(box, right, up) {
 const TOUCH_COLOR = '#c9ced3', OPEN_HATCH = '#b3261e';
 const IFACE_GAP = () => nominal * 0.6;   // how far neighbours are pulled away in the 3D view
 const drawCache = new Map();
+const SEAM_PX = 1.2;   // stroke around the filled triangles
+const SEAM_LOSS_PX = 2;   // ...which takes a whole pixel off each side of an open area
+const cmText = (m) => String(+(m * 100).toFixed(1));   // 5, 7.5, 12 (cm)
+// The separate areas of a pixel mask (4-connected), as bounding boxes; ones narrower than minPx are left out.
+function openAreas(mask, W, H, minPx) {
+  const seen = new Uint8Array(W * H), stack = new Int32Array(W * H), out = [];
+  for (let start = 0; start < W * H; start++) {
+    if (!mask[start] || seen[start]) continue;
+    let n = 0, top = 0, x0 = W, y0 = H, x1 = -1, y1 = -1;
+    stack[top++] = start; seen[start] = 1;
+    while (top) {
+      const k = stack[--top], x = k % W, y = (k - x) / W;
+      n++;
+      if (x < x0) x0 = x; if (x > x1) x1 = x; if (y < y0) y0 = y; if (y > y1) y1 = y;
+      if (x > 0 && mask[k - 1] && !seen[k - 1]) { seen[k - 1] = 1; stack[top++] = k - 1; }
+      if (x < W - 1 && mask[k + 1] && !seen[k + 1]) { seen[k + 1] = 1; stack[top++] = k + 1; }
+      if (y > 0 && mask[k - W] && !seen[k - W]) { seen[k - W] = 1; stack[top++] = k - W; }
+      if (y < H - 1 && mask[k + W] && !seen[k + W]) { seen[k + W] = 1; stack[top++] = k + W; }
+    }
+    if (x1 - x0 + 1 >= minPx && y1 - y0 + 1 >= minPx) out.push({ x0, y0, x1, y1, n });
+  }
+  return out;
+}
 const rgbBytes = (css) => { const n = new THREE.Color(css).getHex(); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
 function faceAxes(c) {
   const forward = new THREE.Vector3().setComponent(c.a, c.side ? -1 : 1);   // looking at the face from the neighbour
@@ -1617,7 +1640,7 @@ function interfaceDrawing(gid, c) {
     cv.width = W; cv.height = H;
     const ctx = cv.getContext('2d');
     ctx.fillStyle = ctx.strokeStyle = '#000';
-    ctx.lineWidth = 1.2;   // a hair of stroke closes the seams between triangles
+    ctx.lineWidth = SEAM_PX;   // a hair of stroke closes the seams between triangles
     ctx.lineJoin = 'round';
     for (const t of fills) {
       ctx.beginPath();
@@ -1633,10 +1656,11 @@ function interfaceDrawing(gid, c) {
   const img = octx.createImageData(W, H);
   const cG = rgbBytes(colG), cH = rgbBytes(colH), cT = rgbBytes(TOUCH_COLOR), cR = rgbBytes(OPEN_HATCH), cW = [255, 255, 255];
   let nT = 0, nO = 0, nG = 0, nH = 0;
+  const openPx = new Uint8Array(W * H);   // both open: the voids connect
   for (let y = 0; y < H; y++) for (let x = 0; x < W; x++) {
     const i = (y * W + x) * 4, a = A[i + 3] > 127, b = B[i + 3] > 127;
     let col;
-    if (a && b) { nT++; col = cT; } else if (a) { nG++; col = cG; } else if (b) { nH++; col = cH; } else { nO++; col = (x + y) % 16 < 3 ? cR : cW; }
+    if (a && b) { nT++; col = cT; } else if (a) { nG++; col = cG; } else if (b) { nH++; col = cH; } else { nO++; openPx[y * W + x] = 1; col = (x + y) % 16 < 3 ? cR : cW; }
     img.data[i] = col[0]; img.data[i + 1] = col[1]; img.data[i + 2] = col[2]; img.data[i + 3] = 255;
   }
   octx.putImageData(img, 0, 0);
@@ -1661,6 +1685,25 @@ function interfaceDrawing(gid, c) {
   }
   strokeEdges(mine.edges, [], 2.6);          // this cube's edges in the plane
   strokeEdges(theirs.edges, [10, 7], 2);     // the neighbour's, dashed
+  // every connecting area gets its bounding box, measured
+  const mPerPx = (u1 - u0) / W;
+  const openings = openAreas(openPx, W, H, Math.max(4, Math.round(0.01 / mPerPx)));   // skip slivers under 1 cm
+  for (const o of openings) {
+    const x0 = o.x0, y0 = o.y0, w = o.x1 + 1 - o.x0, h = o.y1 + 1 - o.y0;
+    octx.save();
+    octx.strokeStyle = OPEN_HATCH; octx.lineWidth = 3;
+    octx.strokeRect(x0 + 1.5, y0 + 1.5, w - 3, h - 3);
+    const text = `${cmText((w + SEAM_LOSS_PX) * mPerPx)} × ${cmText((h + SEAM_LOSS_PX) * mPerPx)} cm`;
+    octx.font = `700 32px Archivo, system-ui, sans-serif`;
+    const tw = octx.measureText(text).width + 16, th = 42;
+    const lx = Math.min(Math.max(0, x0), W - tw);
+    const ly = y0 - th - 4 >= 0 ? y0 - th - 4 : (y0 + h + th + 4 <= H ? y0 + h + 4 : y0 + 4);   // above, else below, else inside
+    octx.fillStyle = OPEN_HATCH;
+    octx.beginPath(); octx.roundRect(lx, ly, tw, th, 6); octx.fill();
+    octx.fillStyle = '#fff'; octx.textBaseline = 'middle';
+    octx.fillText(text, lx + 8, ly + th / 2 + 1);
+    octx.restore();
+  }
   octx.strokeStyle = '#1e232a'; octx.lineWidth = 2; octx.strokeRect(1, 1, W - 2, H - 2);
   const px = (u1 - u0) * (v1 - v0) / (W * H);
   const result = { canvas: out, rect, right, up, colG, colH, w: u1 - u0, h: v1 - v0, face: (u1 - u0) * (v1 - v0),
@@ -1762,7 +1805,7 @@ function renderInterfaces() {
       <div class="detail">
         <figure class="drawing"><figcaption>Seen from ${esc(nameH)} · ${fmtLen(d.w)} × ${fmtLen(d.h)}${gridOn ? ' · grid 5&nbsp;cm' : ''}</figcaption></figure>
         <div class="stats">
-          <div class="hero"><span class="what"><i class="key open"></i>Voids connect</span><b>${fmtM2(d.open)}</b><small>${pct(d.open, d.face)} of the face</small></div>
+          <div class="hero"><span class="what"><i class="key open"></i>Voids connect</span><b>${pct(d.open, d.face)}</b><small>of the face · ${fmtM2(d.open)}</small></div>
           <div class="share"><div><b>${pct(d.open, voidG)}</b><span>of ${esc(nameG)}'s voids</span></div>
             <div><b>${pct(d.open, voidH)}</b><span>of ${esc(nameH)}'s voids</span></div></div>
           <ul class="legend">
