@@ -100,9 +100,13 @@
   .card .row button:disabled { opacity: .6; cursor: progress; }
   .card .empty { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
 
-  .keys { font-size: 13px; color: var(--muted); text-align: right; line-height: 1.7; pointer-events: auto; }
+  .keys { flex: 1 1 340px; min-width: 0; font-size: 13px; color: var(--muted); text-align: right; line-height: 1.7; pointer-events: auto; }
+  .kgroups { display: grid; grid-template-columns: auto auto; justify-content: end; align-items: center; gap: 5px 10px; margin-top: 3px; }
+  .kgroup { display: contents; }
+  .kname { text-align: right; font-size: 11px; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; line-height: 1.2; }
+  .kbtns { display: flex; flex-wrap: wrap; gap: 5px; }
   .keys button { color: var(--ink); background: var(--paper); border: 1px solid var(--rule);
-    border-radius: 4px; padding: 3px 9px; margin-left: 6px; cursor: pointer; }
+    border-radius: 4px; padding: 3px 9px; cursor: pointer; line-height: 1.5; }
   .keys button:disabled { opacity: .6; cursor: progress; }
   .keys button[aria-pressed="true"] { background: var(--ink); color: var(--paper); border-color: var(--ink); }
   .keys kbd { font: inherit; font-weight: 700; }
@@ -399,27 +403,35 @@
     </div>
   </div>
   <div class="keys">
-    <span class="hint">Drag to orbit, scroll to zoom, click a cube for its details</span><br>
-    <button id="btn-update" title="Load the newest models now, without waiting for the cache (U)"><kbd>U</kbd> <span>Update</span></button>
-    <button id="btn-rotate" aria-pressed="true" title="Slowly orbit the model (R)"><kbd>R</kbd> Rotate</button>
-    <button id="btn-sun" aria-pressed="false" title="Sunlight for a date and time (S)"><kbd>S</kbd> Sun</button>
-    <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
-    <button id="btn-color" title="Switch colors: groups, model, white (C)"><kbd>C</kbd> <span id="color-name">Group colors</span></button>
-    <button id="btn-rock" aria-pressed="false" title="Show the cubes in stone (T)"><kbd>T</kbd> Rock</button>
-    <button id="btn-section" aria-pressed="false" title="Cut the model with planes along X, Y and Z (X)"><kbd>X</kbd> Section</button>
-    <button id="btn-grid" aria-pressed="false" title="5 × 5 cm reference grid on the cubes, the ground, the cuts and the drawings (G)"><kbd>G</kbd> Grid</button>
-    <button id="btn-labels" aria-pressed="true" title="Show group labels (L)"><kbd>L</kbd> Labels</button>
-    <button id="btn-history" aria-pressed="true" title="Show or hide the timeline (H)"><kbd>H</kbd> Timeline</button>
-    <button id="btn-fit" title="Frame the view (F)"><kbd>F</kbd> Fit</button>
-    <button id="btn-present" title="Fullscreen with only the model; Esc to come back (P)"><kbd>P</kbd> Fullscreen</button>
-    <button id="btn-manage" title="Hide or delete published versions (M)"><kbd>M</kbd> Manage</button>
+    <span class="hint">Drag to orbit, scroll to zoom, click a cube for its details</span>
+    <div class="kgroups">
+      <div class="kgroup" role="group" aria-labelledby="kg-display"><span class="kname" id="kg-display">Display</span><div class="kbtns">
+        <button id="btn-rotate" aria-pressed="true" title="Slowly orbit the model (R)"><kbd>R</kbd> Rotate</button>
+        <button id="btn-color" title="Switch colors: groups, model, white (C)"><kbd>C</kbd> <span id="color-name">Group colors</span></button>
+        <button id="btn-rock" aria-pressed="false" title="Show the cubes in stone (T)"><kbd>T</kbd> Rock</button>
+        <button id="btn-grid" aria-pressed="false" title="5 × 5 cm reference grid on the cubes, the ground, the cuts and the drawings (G)"><kbd>G</kbd> Grid</button>
+        <button id="btn-fit" title="Frame the view (F)"><kbd>F</kbd> Fit</button>
+        <button id="btn-present" title="Fullscreen with only the model; Esc to come back (P)"><kbd>P</kbd> Fullscreen</button>
+        <button id="btn-section" aria-pressed="false" title="Cut the model with planes along X, Y and Z (X)"><kbd>X</kbd> Section</button>
+        <button id="btn-labels" aria-pressed="true" title="Show group labels (L)"><kbd>L</kbd> Labels</button>
+      </div></div>
+      <div class="kgroup" role="group" aria-labelledby="kg-env"><span class="kname" id="kg-env">Environment</span><div class="kbtns">
+        <button id="btn-sun" aria-pressed="false" title="Sunlight for a date and time (S)"><kbd>S</kbd> Sun</button>
+        <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
+      </div></div>
+      <div class="kgroup" role="group" aria-labelledby="kg-manage"><span class="kname" id="kg-manage">Manage</span><div class="kbtns">
+        <button id="btn-manage" title="Every published file: show, hide or delete versions (M)"><kbd>M</kbd> File viewer</button>
+        <button id="btn-history" aria-pressed="true" title="Show or hide the timeline (H)"><kbd>H</kbd> Timeline</button>
+        <button id="btn-update" title="Load the newest models now, without waiting for the cache (U)"><kbd>U</kbd> <span>Update</span></button>
+      </div></div>
+    </div>
   </div>
 </div>
 
 <section class="sheet" id="sheet" hidden></section>
 <dialog class="manage" id="manage" aria-labelledby="manage-title">
   <header>
-    <h2 id="manage-title">Manage the timeline</h2>
+    <h2 id="manage-title">File viewer</h2>
     <button class="close" type="button" id="manage-close" aria-label="Close">×</button>
   </header>
   <p class="note">Hidden versions stay stored but disappear from the screen and the timeline; show them again any time.

@@ -85,7 +85,7 @@ Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen w
 | **F** | Fit the view |
 | **P** | Fullscreen with only the model (Esc to come back) |
 | **H** | Show or hide the timeline |
-| **M** | Manage the timeline: hide or delete published versions |
+| **M** | File viewer: show, hide or delete published versions |
 | **U** | Update: load the newest models now (see below) |
 
 **Click a cube** for its card: size, volume, void (share of its bounding box left empty), estimated weight in concrete (2.4 t/m³), surface area, which cubes it touches and over how much area, triangle count and file size, plus buttons for One by one and Interfaces. The card also **downloads the published .3dm files**: this version, all versions of the group (zip), or every group as shown (zip; when you're looking back on the timeline, the versions of that moment). These are the files the Publish button sent, so meshes in metres, not the students' working files. Volume needs a closed model; otherwise the card says so. Clicking empty space or **Esc** closes it.
@@ -143,7 +143,7 @@ Run `WorkshopSync.py` on the presentation laptop. Each group arrives on its own 
 
 ## Managing the timeline
 
-**Manage** (M) lists every group with all its published versions, newest first. It asks for the workshop passcode (`WORKSHOP_KEY`) the first time, and remembers it until the browser tab is closed.
+**File viewer** (M) lists every group with all its published versions, newest first. It asks for the workshop passcode (`WORKSHOP_KEY`) the first time, and remembers it until the browser tab is closed.
 
 - **Hide** takes a version off the screen and off the timeline, but keeps the file; **Unhide** brings it back. Under the hood the file is renamed to `….hidden.3dm`, so nothing else needs to remember what's hidden.
 - **Hide all** hides a whole group (its chip goes empty); a new publish from that group shows up again as usual.
