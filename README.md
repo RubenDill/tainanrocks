@@ -150,6 +150,7 @@ Geometry is meshed with the file's render-mesh settings and converted to metres,
    | `auto` | bool | a **Boolean Toggle**: checks by itself every `every` seconds |
    | `every` | int | seconds between automatic checks (default 30, at least 10) |
    | `colours` | str | `group` (default), `model` (the colours the groups published with) or `white` |
+   | `hide` | int | a **Number Slider** (integers, 0 to 8): the group to hide; 0 shows every group. Set the input to List Access to plug in several sliders and hide several groups |
    | `server` | str | overrides `SERVER_URL` |
 
 3. Outputs: `M` (the meshes, one branch per group: `{1}`, `{2}`, …), `C` (one colour per branch), `G` (the group number of each branch) and `status`.

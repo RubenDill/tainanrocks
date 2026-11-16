@@ -13,6 +13,9 @@ SET-UP (once)
        every    Type hint: int    seconds between automatic checks (default 30, at least 10)
        colours  Type hint: str    "group" (default, the class screen's colours), "model" (the colours
                                   the groups published with) or "white"
+       hide     Type hint: int    a Number Slider (integers, 0 to 8): the group to hide; 0 shows every group.
+                                  Set the input to List Access to plug in several sliders (or a list)
+                                  and hide several groups
        server   Type hint: str    overrides SERVER_URL below
   4. Set up the outputs:
        M       the meshes, one branch per group ({1}, {2}, ...), already coloured
@@ -265,6 +268,26 @@ except (TypeError, ValueError):
     every = DEFAULT_EVERY_S
 auto_on = bool(inp("auto", False))
 
+
+def hidden_groups(value):
+    """The group numbers to leave out: one number or a list of them; 0 (or nothing) hides none."""
+    if value is None:
+        return set()
+    if isinstance(value, (str, int, float)) or not hasattr(value, "__iter__"):
+        value = [value]
+    out = set()
+    for item in value:
+        try:
+            n = int(round(float(item)))
+        except (TypeError, ValueError):
+            n = group_number(item)
+        if n:
+            out.add(n)
+    return out
+
+
+hide = hidden_groups(inp("hide"))
+
 if "your-project" in server_url.lower():
     warn("Set SERVER_URL at the top of the script (or connect the server input).", error=True)
 else:
@@ -288,9 +311,13 @@ M = DataTree[object]()
 C, G = [], []
 lines = []
 keys = sorted(memory["blocks"].keys(), key=sort_key)
+hidden_here = [key for key in keys if group_number(key) in hide]
 for i, key in enumerate(keys):
     block = memory["blocks"][key]
     n = group_number(key)
+    if n in hide:
+        lines.append("Group %s: hidden" % key)
+        continue
     path = GH_Path(n if n is not None else 1000 + i)
     fallback = group_colour(key) if mode != "white" else hex_colour(WHITE)
     branch_colour = None
@@ -308,7 +335,8 @@ for i, key in enumerate(keys):
     lines.append("Group %s: published %s (%.2f MB)" % (key, local_time(block["publishedAt"]),
                                                        block["size"] / 1048576.0))
 
-ghenv.Component.Message = "%d group%s" % (len(keys), "" if len(keys) == 1 else "s")
+ghenv.Component.Message = "%d group%s%s" % (len(keys), "" if len(keys) == 1 else "s",
+                                            ", %d hidden" % len(hidden_here) if hidden_here else "")
 if memory["checked"] is None:
     head = "Not checked yet."
 elif keys:
