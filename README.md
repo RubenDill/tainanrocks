@@ -151,11 +151,12 @@ Geometry is meshed with the file's render-mesh settings and converted to metres,
    | `every` | int | seconds between automatic checks (default 30, at least 10) |
    | `colours` | str | `group` (default), `model` (the colours the groups published with) or `white` |
    | `hide` | int | a **Number Slider** (integers, 0 to 8): the group to hide; 0 shows every group. Set the input to List Access to plug in several sliders and hide several groups |
+   | `edges` | bool | `False` turns the edge lines off (on by default) |
    | `server` | str | overrides `SERVER_URL` |
 
 3. Outputs: `M` (the meshes, one branch per group: `{1}`, `{2}`, …), `C` (one colour per branch), `G` (the group number of each branch) and `status`.
 
-The component's own preview already shows each group in its colour, because the colour is stored on the meshes; for transparency or materials, turn its preview off and connect `M` and `C` to a *Custom Preview*. Bake `M` to keep a copy in the Rhino file. The pieces arrive at their real coordinates, scaled from the published metres to your file's units, so they sit in the template. Versions hidden in **Manage** are left out. Only new versions are downloaded, and a check reads the same cached list as the class screen, so a new publish can take up to a minute to appear (pressing **Update** on the screen speeds that up). Don't model on top of it: these are the published meshes, not the groups' working files.
+The component's own preview looks like the class screen: each group in its colour (stored on the meshes) with the same dark edge lines wherever the surface turns by more than 28°, so the voids read clearly. The edge lines follow the component's preview (hide the component and they go too). If every triangle shows as well, untick *Display → Preview Mesh Edges* in Grasshopper. For transparency or materials, turn its preview off and connect `M` and `C` to a *Custom Preview*. Bake `M` to keep a copy in the Rhino file. The pieces arrive at their real coordinates, scaled from the published metres to your file's units, so they sit in the template. Versions hidden in **Manage** are left out. Only new versions are downloaded, and a check reads the same cached list as the class screen, so a new publish can take up to a minute to appear (pressing **Update** on the screen speeds that up). Don't model on top of it: these are the published meshes, not the groups' working files.
 
 ## Managing the timeline
 

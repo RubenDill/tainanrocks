@@ -16,6 +16,7 @@ SET-UP (once)
        hide     Type hint: int    a Number Slider (integers, 0 to 8): the group to hide; 0 shows every group.
                                   Set the input to List Access to plug in several sliders (or a list)
                                   and hide several groups
+       edges    Type hint: bool   optional: False turns the edge lines off (they're on by default)
        server   Type hint: str    overrides SERVER_URL below
   4. Set up the outputs:
        M       the meshes, one branch per group ({1}, {2}, ...), already coloured
@@ -24,10 +25,13 @@ SET-UP (once)
        status  what happened
   5. Optional: right-click the component > "Create User Object..." so it's in your toolbar next time.
 
-The component's own preview shows every group in its colour (the colour is stored on the meshes),
-so nothing else needs connecting. For transparency or other materials, turn the component's preview
-off and connect M and C to a Custom Preview (Display > Preview > Custom Preview, with a Create
-Material in between). Bake M to keep a copy in Rhino.
+The component's own preview shows every group like the class screen: each in its colour (the
+colour is stored on the meshes) with the same dark edge lines, drawn wherever the surface turns by
+more than 28 degrees, so the outline of every void reads clearly. The edge lines follow the
+component's preview: hide the component and they go too. If you also see every triangle drawn,
+untick Display > Preview Mesh Edges in Grasshopper. For transparency or other materials, turn the
+component's preview off and connect M and C to a Custom Preview (with a Create Material in between).
+Bake M to keep a copy in Rhino.
 
 Only versions that are new since the last check are downloaded. Models arrive at their real
 coordinates and are scaled from the published metres to this Rhino file's units, so they line up
@@ -37,6 +41,7 @@ pressing Update on the class screen rebuilds that list straight away.
 Works in Rhino 7 and Rhino 8 (Windows and Mac).
 """
 import json
+import math
 import time
 import System
 import Rhino
@@ -58,6 +63,10 @@ MIN_EVERY_S = 10      # the server's list only changes about once every 6 s anyw
 GROUP_COLOURS = ["#e05a3a", "#f2b134", "#7fb04b", "#2a9d8f", "#3a78c2", "#6a4c9c", "#d9779f", "#8d6e4e"]
 EXTRA_COLOURS = ["#ff48b0", "#0078bf", "#ff6c2f", "#765ba7", "#00838a", "#ffb511", "#62a8e5", "#bb8b41"]
 WHITE = "#f6f7f5"
+EDGE_INK = "#1e232a"   # the class screen's edge lines: this ink at 55% over the surface colour
+EDGE_OPACITY = 0.55
+CREASE_DEG = 28        # an edge is drawn where the faces meet at more than this (EdgesGeometry(g, 28))
+EDGE_THICKNESS = 1     # pixels, like the screen's WebGL lines
 
 
 def inp(name, default=None):
@@ -103,6 +112,13 @@ def group_colour(key):
 
 def is_black(c):
     return c.R == 0 and c.G == 0 and c.B == 0
+
+
+def edge_colour(surface):
+    """The screen's semi-transparent ink as it looks over this surface colour."""
+    ink = hex_colour(EDGE_INK)
+    mix = lambda a, b: int(round(a + (b - a) * EDGE_OPACITY))
+    return System.Drawing.Color.FromArgb(mix(surface.R, ink.R), mix(surface.G, ink.G), mix(surface.B, ink.B))
 
 
 # ---------------------------------------------------------------- network
@@ -240,6 +256,74 @@ def check_server(memory, server):
     return problems
 
 
+def crease_lines(mesh):
+    """The mesh's outline as the class screen draws it: open edges, and edges where the two faces
+    meet at more than CREASE_DEG. Triangles on a flat or gently curved face are left out."""
+    limit = math.cos(math.radians(CREASE_DEG))
+    if mesh.FaceNormals.Count != mesh.Faces.Count:
+        mesh.FaceNormals.ComputeFaceNormals()
+    normals = mesh.FaceNormals
+    topology = mesh.TopologyEdges      # joins faces that share a corner position, welded or not
+    lines = []
+    for i in range(topology.Count):
+        faces = topology.GetConnectedFaces(i)
+        if faces.Length == 2:
+            a, b = normals[faces[0]], normals[faces[1]]
+            dot = a.X * b.X + a.Y * b.Y + a.Z * b.Z
+            if dot >= limit or (a.X == a.Y == a.Z == 0) or (b.X == b.Y == b.Z == 0):
+                continue      # smooth, or a degenerate sliver face without a direction
+        lines.append(topology.EdgeLine(i))
+    return System.Array[rg.Line](lines)
+
+
+def previewing(component):
+    """Whether Grasshopper is showing this component's preview right now."""
+    doc = component.OnPingDocument()
+    if doc is None or component.Hidden or component.Locked:
+        return False          # deleted, preview off, or disabled
+    canvas = Grasshopper.Instances.ActiveCanvas
+    if canvas is None or canvas.Document is None or not canvas.Document.Equals(doc):
+        return False          # another Grasshopper file is open
+    try:
+        if doc.PreviewMode == Grasshopper.Kernel.GH_PreviewMode.Disabled:
+            return False
+        if doc.PreviewFilter == Grasshopper.Kernel.GH_PreviewFilter.Selected and not component.Attributes.Selected:
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def install_edge_drawing(memory):
+    """Draw memory["draw"] (edge lines with their colour) in the Rhino viewports, after the shaded
+    objects so the depth buffer hides the edges at the back. Re-installed on every run, so the
+    newest version of the script is the one drawing."""
+    key = "workshoplive_pull_edges_" + str(ghenv.Component.InstanceGuid)
+    old = sc.sticky.get(key)
+    if old is not None:
+        try:
+            Rhino.Display.DisplayPipeline.PostDrawObjects -= old
+        except Exception:
+            pass
+    component = ghenv.Component
+
+    def draw(sender, e):
+        try:
+            if not memory["draw"] or not previewing(component):
+                return
+            for lines, colour in memory["draw"]:
+                try:
+                    e.Display.DrawLines(lines, colour, EDGE_THICKNESS)
+                except Exception:
+                    for line in lines:
+                        e.Display.DrawLine(line, colour, EDGE_THICKNESS)
+        except Exception:
+            pass    # never let a drawing problem interrupt Rhino's redraw
+
+    Rhino.Display.DisplayPipeline.PostDrawObjects += draw
+    sc.sticky[key] = draw
+
+
 def run_again_in(seconds):
     """Ask Grasshopper to run this component again later (for auto)."""
     component = ghenv.Component
@@ -257,6 +341,7 @@ def run_again_in(seconds):
 # ---------------------------------------------------------------- the component
 memory = sc.sticky.setdefault("workshoplive_pull_" + str(ghenv.Component.InstanceGuid),
                               {"time": 0.0, "blocks": {}, "problems": [], "checked": None})
+memory.setdefault("draw", [])
 server_url = str(inp("server", SERVER_URL) or SERVER_URL)
 mode = str(inp("colours", "group") or "group").strip().lower()
 if mode not in ("group", "model", "white"):
@@ -267,6 +352,7 @@ try:
 except (TypeError, ValueError):
     every = DEFAULT_EVERY_S
 auto_on = bool(inp("auto", False))
+edges_on = bool(inp("edges", True))
 
 
 def hidden_groups(value):
@@ -310,6 +396,7 @@ for problem in memory["problems"]:
 M = DataTree[object]()
 C, G = [], []
 lines = []
+draw = []
 keys = sorted(memory["blocks"].keys(), key=sort_key)
 hidden_here = [key for key in keys if group_number(key) in hide]
 for i, key in enumerate(keys):
@@ -321,7 +408,9 @@ for i, key in enumerate(keys):
     path = GH_Path(n if n is not None else 1000 + i)
     fallback = group_colour(key) if mode != "white" else hex_colour(WHITE)
     branch_colour = None
-    for mesh, published in block["parts"]:
+    if edges_on and "edges" not in block:
+        block["edges"] = [crease_lines(mesh) for mesh, published in block["parts"]]   # once per version
+    for j, (mesh, published) in enumerate(block["parts"]):
         colour = fallback
         if mode == "model" and published is not None and not is_black(published):
             colour = published
@@ -330,10 +419,15 @@ for i, key in enumerate(keys):
         shown = mesh.DuplicateMesh()
         shown.VertexColors.CreateMonotoneMesh(colour)   # this is what colours the component's preview
         M.Add(shown, path)
+        if edges_on and block["edges"][j].Length:
+            draw.append((block["edges"][j], edge_colour(colour)))
     C.append(branch_colour or fallback)
     G.append(n if n is not None else key)
     lines.append("Group %s: published %s (%.2f MB)" % (key, local_time(block["publishedAt"]),
                                                        block["size"] / 1048576.0))
+
+memory["draw"] = draw
+install_edge_drawing(memory)
 
 ghenv.Component.Message = "%d group%s%s" % (len(keys), "" if len(keys) == 1 else "s",
                                             ", %d hidden" % len(hidden_here) if hidden_here else "")
