@@ -225,18 +225,21 @@
   .sheet .drawing { margin: 0; }
   .sheet .drawing canvas { display: block; width: 100%; height: auto; max-height: 36vh; object-fit: contain; border-radius: 3px; }
   .sheet .drawing figcaption { font-size: 12.5px; color: var(--muted); margin-top: 5px; }
-  .sheet .big { display: grid; gap: 8px; }
-  .sheet .big div { padding: 9px 11px; border-radius: 6px; background: var(--paper); border: 1px solid #e3e6e8; }
-  .sheet .big b { display: block; font-size: 20px; font-weight: 780; font-variation-settings: 'wdth' 110; font-variant-numeric: tabular-nums; }
-  .sheet .big span { display: block; font-size: 13px; color: var(--muted); line-height: 1.35; }
-  .sheet .big .key { margin-right: 5px; }
-  .sheet table { width: 100%; border-collapse: collapse; font-size: 13.5px; margin-top: 8px; font-variant-numeric: tabular-nums; }
-  .sheet td { padding: 4px 0; border-top: 1px solid #eceff1; }
-  .sheet td + td { text-align: right; padding-left: 12px; white-space: nowrap; }
-  .sheet tr.total td { font-weight: 700; border-top: 1.5px solid var(--rule); }
+  .sheet .stats { display: grid; gap: 10px; font-variant-numeric: tabular-nums; }
+  .sheet .hero { padding: 10px 12px; border-radius: 6px; background: #fbeceb; border: 1px solid #f0c9c6; }
+  .sheet .hero .what { display: block; font-size: 13.5px; font-weight: 700; color: #8c1d17; }
+  .sheet .hero b { display: block; font-size: 32px; line-height: 1.1; font-weight: 780; font-variation-settings: 'wdth' 110; color: #b3261e; margin-top: 2px; }
+  .sheet .hero small { display: block; font-size: 13px; color: var(--muted); }
+  .sheet .share { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .sheet .share div { padding: 7px 10px; border-radius: 6px; border: 1px solid #e3e6e8; }
+  .sheet .share b { display: block; font-size: 19px; font-weight: 750; color: #b3261e; }
+  .sheet .share span { display: block; font-size: 12.5px; color: var(--muted); line-height: 1.3; }
+  .sheet .legend { list-style: none; margin: 0; padding: 0; font-size: 13px; color: var(--muted); }
+  .sheet .legend li { display: flex; justify-content: space-between; gap: 10px; padding: 3px 0; border-top: 1px solid #eceff1; }
+  .sheet .legend li span:last-child { white-space: nowrap; }
   .key { display: inline-block; width: 13px; height: 13px; border-radius: 2px; margin-right: 7px; vertical-align: -2px;
     background: var(--c); box-shadow: 0 0 0 1px rgba(30,35,42,.25); }
-  .key.touch { background: #59616b; }
+  .key.touch { background: #c9ced3; }
   .key.open { background: repeating-linear-gradient(135deg, #b3261e 0 2px, #fff 2px 6px); }
   .sheet .print { border: 1px solid var(--rule); background: var(--paper); border-radius: 4px; padding: 5px 12px; cursor: pointer; flex: none; }
   @media print {
@@ -1584,7 +1587,7 @@ function faceRect(box, right, up) {
 // ---- one shared face, drawn as the neighbour sees it: where both cubes are solid (they touch),
 // where both are open (the voids connect), and where only one of them has material. The areas are
 // counted on the same 720-px raster (≈ 0.6 mm per pixel on a 0.45 m face).
-const TOUCH_COLOR = '#59616b', OPEN_HATCH = '#b3261e';
+const TOUCH_COLOR = '#c9ced3', OPEN_HATCH = '#b3261e';
 const IFACE_GAP = () => nominal * 0.6;   // how far neighbours are pulled away in the 3D view
 const drawCache = new Map();
 const rgbBytes = (css) => { const n = new THREE.Color(css).getHex(); return [(n >> 16) & 255, (n >> 8) & 255, n & 255]; };
@@ -1701,7 +1704,7 @@ function buildFaceSheets(gid, list = [], drawings = []) {
   });
 }
 
-const fmtM2 = (a) => `${a.toFixed(a < 0.01 ? 4 : 3)} m²`;
+const fmtM2 = (a) => (a < 5e-5 ? '0 m²' : `${a.toFixed(a < 0.01 ? 4 : 3)} m²`);
 const pct = (a, of) => `${of > 0 ? Math.round((a / of) * 100) : 0}%`;
 const faceTitle = (c) => (c.a === 2 ? (c.side ? 'Top' : 'Bottom') : SIDE_NAMES[c.a][c.side][0].toUpperCase() + SIDE_NAMES[c.a][c.side].slice(1));
 
@@ -1747,30 +1750,28 @@ function renderInterfaces() {
   buildFaceSheets(g ? slot.id : null, list, drawings);
   if (list.length) {
     const nameOf = (id) => slotList.find((x) => x.id === id)?.name || id;
-    html += `<p class="note">Click a face in the 3D view, or pick one here.</p>
-      <div class="faces" role="tablist" aria-label="Faces">${list.map((c, i) => {
+    html += `<div class="faces" role="tablist" aria-label="Faces" title="Pick a face here or click one in the 3D view">${list.map((c, i) => {
         const d = drawings[i];
         return `<button type="button" role="tab" data-face="${i}" aria-selected="${i === faceSel}"><span class="key" style="--c:${esc(d.colH)}"></span>
-          <b>${faceTitle(c)} · ${esc(nameOf(c.hid))}</b><small>${pct(d.touch, d.face)} touch · ${pct(d.open, d.face)} voids</small></button>`;
+          <b>${faceTitle(c)} · ${esc(nameOf(c.hid))}</b><small>${pct(d.open, d.face)} voids connect</small></button>`;
       }).join('')}</div>`;
     const c = list[faceSel], d = drawings[faceSel];
     const nameG = slot.name, nameH = nameOf(c.hid);
-    const voidG = d.open + d.hOnly, voidH = d.open + d.gOnly;
-    html += `<h3>${faceTitle(c)} face of ${esc(nameG)} ↔ ${SIDE_NAMES[c.a][1 - c.side]} face of ${esc(nameH)}</h3>
+    const voidG = d.open + d.hOnly, voidH = d.open + d.gOnly;   // each side's open area on this face
+    html += `<h3>${faceTitle(c)} face ↔ ${esc(nameH)}</h3>
       <div class="detail">
-        <figure class="drawing"><figcaption>Seen from ${esc(nameH)} · ${fmtLen(d.w)} × ${fmtLen(d.h)} · solid line ${esc(nameG)}, dashed ${esc(nameH)}${gridOn ? ' · grid 5 cm' : ''}</figcaption></figure>
-        <div class="big"><div><b>${fmtM2(d.touch)}</b><span><i class="key touch"></i>${pct(d.touch, d.face)} · solid surface touching</span></div>
-          <div><b>${fmtM2(d.open)}</b><span><i class="key open"></i>${pct(d.open, d.face)} · voids connect</span></div></div>
-      </div>
-      <table>
-        <tr><td><i class="key touch"></i>Touching: both solid</td><td>${fmtM2(d.touch)}</td><td>${pct(d.touch, d.face)}</td></tr>
-        <tr><td><i class="key open"></i>Voids connect: both open</td><td>${fmtM2(d.open)}</td><td>${pct(d.open, d.face)}</td></tr>
-        <tr><td><i class="key" style="--c:${esc(d.colG)}"></i>${esc(nameG)} solid, ${esc(nameH)} open</td><td>${fmtM2(d.gOnly)}</td><td>${pct(d.gOnly, d.face)}</td></tr>
-        <tr><td><i class="key" style="--c:${esc(d.colH)}"></i>${esc(nameG)} open, ${esc(nameH)} solid</td><td>${fmtM2(d.hOnly)}</td><td>${pct(d.hOnly, d.face)}</td></tr>
-        <tr class="total"><td>Shared face</td><td>${fmtM2(d.face)}</td><td>100%</td></tr>
-      </table>
-      <p class="note">${esc(nameG)}'s voids on this face: ${fmtM2(voidG)} (${pct(voidG, d.face)} of it), of which ${pct(d.open, voidG)} open into ${esc(nameH)}'s voids.
-        ${esc(nameH)}'s voids: ${fmtM2(voidH)} (${pct(voidH, d.face)}), of which ${pct(d.open, voidH)} open into ${esc(nameG)}'s.</p>`;
+        <figure class="drawing"><figcaption>Seen from ${esc(nameH)} · ${fmtLen(d.w)} × ${fmtLen(d.h)}${gridOn ? ' · grid 5&nbsp;cm' : ''}</figcaption></figure>
+        <div class="stats">
+          <div class="hero"><span class="what"><i class="key open"></i>Voids connect</span><b>${fmtM2(d.open)}</b><small>${pct(d.open, d.face)} of the face</small></div>
+          <div class="share"><div><b>${pct(d.open, voidG)}</b><span>of ${esc(nameG)}'s voids</span></div>
+            <div><b>${pct(d.open, voidH)}</b><span>of ${esc(nameH)}'s voids</span></div></div>
+          <ul class="legend">
+            <li><span><i class="key" style="--c:${esc(d.colH)}"></i>Only ${esc(nameG)} open</span><span>${pct(d.hOnly, d.face)}</span></li>
+            <li><span><i class="key" style="--c:${esc(d.colG)}"></i>Only ${esc(nameH)} open</span><span>${pct(d.gOnly, d.face)}</span></li>
+            <li><span><i class="key touch"></i>Solid touch</span><span>${pct(d.touch, d.face)}</span></li>
+          </ul>
+        </div>
+      </div>`;
   }
   sheetEl.innerHTML = html;
   if (list.length) sheetEl.querySelector('.drawing').prepend(drawings[faceSel].canvas);
