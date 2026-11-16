@@ -75,10 +75,9 @@ CREASE_DEG = 28        # an edge is drawn where the faces meet at more than this
 EDGE_THICKNESS = 1     # pixels, like the screen's WebGL lines
 DOT_INK = "#1e232a"    # text dots: dark tags, like on the class screen
 SHADE_GLOW = 0.25      # share of the colour that shows even where no light falls
-NEGATIVE_LAYER = "Negative space"   # negative space: on this layer, or tagged with this user text
-NEGATIVE_TAG = ("workshoplive", "negative")
+NEGATIVE_TAG = ("workshoplive", "negative")   # negative space is marked with this user text
 GHOST_TRANSPARENCY = 0.88           # very ghosted, like the class screen (12% opaque)
-CACHE_VERSION = 2                   # versions loaded by an earlier script are loaded again
+CACHE_VERSION = 3                   # versions loaded by an earlier script are loaded again
 
 
 def inp(name, default=None):
@@ -245,12 +244,11 @@ def load_model(url):
 
 
 def is_negative(f, attrs):
-    """Whether an object was published as negative space (never part of the cube)."""
+    """Whether an object was published as negative space (never part of the cube). Only the user
+    text counts, never the layer: files from the first version of the option put the cube on the
+    "Negative space" layer too (it was the file's first layer)."""
     try:
-        if attrs.GetUserString(NEGATIVE_TAG[0]) == NEGATIVE_TAG[1]:
-            return True
-        layer = f.AllLayers.FindIndex(attrs.LayerIndex)
-        return layer is not None and layer.Name == NEGATIVE_LAYER
+        return attrs.GetUserString(NEGATIVE_TAG[0]) == NEGATIVE_TAG[1]
     except Exception:
         return False
 

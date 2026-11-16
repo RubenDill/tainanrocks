@@ -52,8 +52,9 @@ WORKSHOP_KEY = "blocks-2026"
 # ---------------------------------------------------------------------------
 
 GROUPS = 8
-NEGATIVE_LAYER = "Negative space"   # the class screen shows what's on this layer ghosted, never as the cube
-NEGATIVE_TAG = ("workshoplive", "negative")   # ... and anything with this user text
+CUBE_LAYER = "Cube"
+NEGATIVE_LAYER = "Negative space"   # negative space goes on this layer, for anyone opening the file...
+NEGATIVE_TAG = ("workshoplive", "negative")   # ... and is marked with this user text, which is what counts
 DOT_INK = System.Drawing.Color.FromArgb(0x1e, 0x23, 0x2a)          # dark tags, like on the class screen
 NO_NAME = System.Drawing.Color.FromArgb(0xe0, 0x8a, 0x1c)          # a point that still needs a name
 MAX_BYTES = 4 * 1024 * 1024
@@ -249,13 +250,14 @@ def fingerprint(meshes, dots, extra):
     return "|".join(out)
 
 
-def negative_layer(f):
-    """The index of the negative-space layer in the file being written."""
+def add_layer(f, name, colour):
+    """Add a layer to the file being written; returns its index."""
     try:
-        return f.AllLayers.AddLayer(NEGATIVE_LAYER, System.Drawing.Color.FromArgb(160, 160, 160))
+        return f.AllLayers.AddLayer(name, colour)
     except Exception:
         layer = Rhino.DocObjects.Layer()
-        layer.Name = NEGATIVE_LAYER
+        layer.Name = name
+        layer.Color = colour
         f.AllLayers.Add(layer)
         return f.AllLayers.Count - 1
 
@@ -263,8 +265,11 @@ def negative_layer(f):
 def write_3dm(meshes, dots, colour, group, ghosts=()):
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
+    # The cube gets a layer of its own, made first: objects land on a file's first layer unless told
+    # otherwise, and that must never be the negative-space layer.
+    cube_layer = add_layer(f, CUBE_LAYER, System.Drawing.Color.Black)
     if ghosts:
-        layer = negative_layer(f)
+        layer = add_layer(f, NEGATIVE_LAYER, System.Drawing.Color.FromArgb(160, 160, 160))
         for m in ghosts:
             attr = Rhino.DocObjects.ObjectAttributes()
             attr.LayerIndex = layer
@@ -272,15 +277,18 @@ def write_3dm(meshes, dots, colour, group, ghosts=()):
             f.Objects.AddMesh(m, attr)
     for m in meshes:
         attr = Rhino.DocObjects.ObjectAttributes()
+        attr.LayerIndex = cube_layer
         if colour is not None:
             attr.ColorSource = Rhino.DocObjects.ObjectColorSource.ColorFromObject
             attr.ObjectColor = colour
         f.Objects.AddMesh(m, attr)
     for d in dots:     # no colour of their own: the screen draws them as dark tags
+        attr = Rhino.DocObjects.ObjectAttributes()
+        attr.LayerIndex = cube_layer
         try:
-            f.Objects.AddTextDot(d, Rhino.DocObjects.ObjectAttributes())
+            f.Objects.AddTextDot(d, attr)
         except Exception:
-            f.Objects.AddTextDot(d.Text, d.Point)
+            f.Objects.AddTextDot(d.Text, d.Point, attr)
     path = os.path.join(System.IO.Path.GetTempPath(), "workshoplive_gh_group%d.3dm" % group)
     if not f.Write(path, 7):
         raise Exception("could not write the temporary file %s" % path)

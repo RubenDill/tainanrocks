@@ -821,22 +821,17 @@ function paint(id, raw, ghost) {
 }
 
 // ---------- negative space (N): the objects that cut each cube's voids, published with the cube
-// (the NegativeSpace option) on their own layer. Very ghosted, never part of the cube: they hang in
+// (the NegativeSpace option), tagged with user text. Very ghosted, never part of the cube: they hang in
 // their own group next to it, so the volume, voids, interfaces, sections and clicks ignore them.
-const NEGATIVE_LAYER = 'Negative space';
 const GHOST_OPACITY = 0.12;
 const ghostEdgeMat = new THREE.LineBasicMaterial({ color: '#1e232a', transparent: true, opacity: 0.2, depthWrite: false,
   clippingPlanes: cutPlanes });
 const ghostGroups = new Set();
 let negativeOn = params.get('negative') === '1';
+// Only the workshoplive=negative user text counts, never the layer: files from the first version
+// of the option put the cube on the "Negative space" layer too (it was the file's first layer).
 function isNegative(doc, attrs) {
-  try {
-    if (attrs.getUserString?.('workshoplive') === 'negative') return true;
-    const layer = doc.layers().get(attrs.layerIndex);
-    const name = layer?.name;
-    layer?.delete?.();
-    return name === NEGATIVE_LAYER;
-  } catch { return false; }
+  try { return attrs.getUserString('workshoplive') === 'negative'; } catch { return false; }
 }
 // The cube's colour, halfway to white: a pale tint of it.
 function ghostColor(id, modelColor) {

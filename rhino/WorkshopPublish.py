@@ -52,8 +52,9 @@ STICKY_HANDLER = "workshoplive_publish_on_save"
 MAX_BYTES = 4 * 1024 * 1024
 MAX_DEPTH = 8  # nested block definitions
 DOT_MARGIN_M = 0.03   # text dots this far outside the cube's bounding box still count as on it
-NEGATIVE_LAYER = "Negative space"   # the class screen shows what's on this layer ghosted, never as the cube
-NEGATIVE_TAG = ("workshoplive", "negative")   # ... and anything with this user text
+CUBE_LAYER = "Cube"
+NEGATIVE_LAYER = "Negative space"   # negative space goes on this layer, for anyone opening the file...
+NEGATIVE_TAG = ("workshoplive", "negative")   # ... and is marked with this user text, which is what counts
 
 
 # ---------------------------------------------------------------- settings
@@ -254,13 +255,14 @@ def add_dot(f, dot, attr):
         return f.Objects.AddTextDot(dot.Text, dot.Point, attr)
 
 
-def negative_layer(f):
-    """The index of the negative-space layer in the file being written."""
+def add_layer(f, name, colour):
+    """Add a layer to the file being written; returns its index."""
     try:
-        return f.AllLayers.AddLayer(NEGATIVE_LAYER, System.Drawing.Color.FromArgb(160, 160, 160))
+        return f.AllLayers.AddLayer(name, colour)
     except Exception:
         layer = Rhino.DocObjects.Layer()
-        layer.Name = NEGATIVE_LAYER
+        layer.Name = name
+        layer.Color = colour
         f.AllLayers.Add(layer)
         return f.AllLayers.Count - 1
 
@@ -281,8 +283,11 @@ def build_file(doc, obj, group, with_dots=False, negative=()):
             collect_meshes(doc, other.Geometry, to_m_xform, other.Attributes.DrawColor(doc), mp, ghosts)
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
+    # The cube gets a layer of its own, made first: objects land on a file's first layer unless told
+    # otherwise, and that must never be the negative-space layer.
+    cube_layer = add_layer(f, CUBE_LAYER, System.Drawing.Color.Black)
     if ghosts:
-        layer = negative_layer(f)
+        layer = add_layer(f, NEGATIVE_LAYER, System.Drawing.Color.FromArgb(160, 160, 160))
         for mesh, color in ghosts:
             attr = Rhino.DocObjects.ObjectAttributes()
             attr.LayerIndex = layer
@@ -292,6 +297,7 @@ def build_file(doc, obj, group, with_dots=False, negative=()):
             f.Objects.AddMesh(mesh, attr)
     for geometry, color in parts + dots:
         attr = Rhino.DocObjects.ObjectAttributes()
+        attr.LayerIndex = cube_layer
         attr.ColorSource = Rhino.DocObjects.ObjectColorSource.ColorFromObject
         attr.ObjectColor = color
         if isinstance(geometry, rg.TextDot):
