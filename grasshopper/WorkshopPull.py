@@ -17,6 +17,7 @@ SET-UP (once)
                                   Set the input to List Access to plug in several sliders (or a list)
                                   and hide several groups
        edges    Type hint: bool   optional: False turns the edge lines off (they're on by default)
+       shading  Type hint: bool   optional: False draws the cubes in flat colour, without light
        server   Type hint: str    overrides SERVER_URL below
   4. Set up the outputs:
        M       the meshes, one branch per group ({1}, {2}, ...), already coloured
@@ -25,13 +26,13 @@ SET-UP (once)
        status  what happened
   5. Optional: right-click the component > "Create User Object..." so it's in your toolbar next time.
 
-The component's own preview shows every group like the class screen: each in its colour (the
-colour is stored on the meshes) with the same dark edge lines, drawn wherever the surface turns by
-more than 28 degrees, so the outline of every void reads clearly. The edge lines follow the
-component's preview: hide the component and they go too. If you also see every triangle drawn,
-untick Display > Preview Mesh Edges in Grasshopper. For transparency or other materials, turn the
+The component draws every group like the class screen: shaded in its colour with a matte finish
+(lit by the viewport's lights, with soft fill on the shadow side), and the same dark edge lines
+wherever the surface turns by more than 28 degrees, so the outline of every void reads clearly.
+It follows the component's preview: hide the component and the cubes go too. Grasshopper's own
+(flat) preview of M is switched off for this. For transparency or other materials, turn the
 component's preview off and connect M and C to a Custom Preview (with a Create Material in between).
-Bake M to keep a copy in Rhino.
+Bake M to keep a copy in Rhino (the meshes carry their colour).
 
 Only versions that are new since the last check are downloaded. Models arrive at their real
 coordinates and are scaled from the published metres to this Rhino file's units, so they line up
@@ -67,6 +68,7 @@ EDGE_INK = "#1e232a"   # the class screen's edge lines: this ink at 55% over the
 EDGE_OPACITY = 0.55
 CREASE_DEG = 28        # an edge is drawn where the faces meet at more than this (EdgesGeometry(g, 28))
 EDGE_THICKNESS = 1     # pixels, like the screen's WebGL lines
+SHADE_GLOW = 0.25      # share of the colour that shows even where no light falls
 
 
 def inp(name, default=None):
@@ -294,13 +296,61 @@ def previewing(component):
     return True
 
 
-def install_edge_drawing(memory):
-    """Draw memory["draw"] (edge lines with their colour) in the Rhino viewports, after the shaded
-    objects so the depth buffer hides the edges at the back. Re-installed on every run, so the
+_materials = {}
+
+
+def shaded_material(colour):
+    """A matte material like the class screen's (rough, no shine), lit by the viewport's lights.
+    A little of the colour glows by itself, like the screen's soft sky light, so the sides turned
+    away from the light stay readable."""
+    key = colour.ToArgb()
+    if key not in _materials:
+        m = Rhino.Display.DisplayMaterial(colour)
+        glow = lambda v: int(round(v * SHADE_GLOW))
+        for side in ("", "Back"):
+            try:
+                setattr(m, side + "Diffuse", colour)
+                setattr(m, side + "Specular", System.Drawing.Color.Black)
+                setattr(m, side + "Shine", 0.0)
+                setattr(m, side + "Emission", System.Drawing.Color.FromArgb(glow(colour.R), glow(colour.G), glow(colour.B)))
+            except Exception:
+                pass
+        try:
+            m.IsTwoSided = True     # the screen draws both sides, so voids look the same from inside
+        except Exception:
+            pass
+        _materials[key] = m
+    return _materials[key]
+
+
+def hide_grasshopper_preview(name):
+    """Stop Grasshopper drawing an output itself (it draws coloured meshes flat, without light), so
+    this component's shaded drawing is the only one. Returns False if that can't be done."""
+    for param in ghenv.Component.Params.Output:
+        if param.NickName == name:
+            try:
+                if not param.Hidden:
+                    param.Hidden = True
+                return True
+            except Exception:
+                return False
+    return True     # no such output: nothing for Grasshopper to draw
+
+
+def install_drawing(memory):
+    """Draw memory["draw"] in the Rhino viewports: each cube shaded, then its edge lines, after
+    Rhino's own objects so the depth buffer hides what's behind. Re-installed on every run, so the
     newest version of the script is the one drawing."""
-    key = "workshoplive_pull_edges_" + str(ghenv.Component.InstanceGuid)
+    key = "workshoplive_pull_drawing_" + str(ghenv.Component.InstanceGuid)
     old = sc.sticky.get(key)
     if old is not None:
+        try:
+            Rhino.Display.DisplayPipeline.PostDrawObjects -= old[0]
+            Rhino.Display.DisplayPipeline.CalculateBoundingBox -= old[1]
+        except Exception:
+            pass
+    old = sc.sticky.pop("workshoplive_pull_edges_" + str(ghenv.Component.InstanceGuid), None)
+    if old is not None:     # the edges-only drawing of an earlier version of this script
         try:
             Rhino.Display.DisplayPipeline.PostDrawObjects -= old
         except Exception:
@@ -311,17 +361,30 @@ def install_edge_drawing(memory):
         try:
             if not memory["draw"] or not previewing(component):
                 return
-            for lines, colour in memory["draw"]:
+            for mesh, material, lines, ink in memory["draw"]:   # all surfaces first, then all lines
+                if mesh is not None:
+                    e.Display.DrawMeshShaded(mesh, material)
+            for mesh, material, lines, ink in memory["draw"]:
+                if lines is None:
+                    continue
                 try:
-                    e.Display.DrawLines(lines, colour, EDGE_THICKNESS)
+                    e.Display.DrawLines(lines, ink, EDGE_THICKNESS)
                 except Exception:
                     for line in lines:
-                        e.Display.DrawLine(line, colour, EDGE_THICKNESS)
+                        e.Display.DrawLine(line, ink, EDGE_THICKNESS)
         except Exception:
             pass    # never let a drawing problem interrupt Rhino's redraw
 
+    def bounds(sender, e):
+        try:   # so Rhino's near and far clipping planes leave room for the cubes
+            if memory.get("bbox") is not None and memory["draw"] and previewing(component):
+                e.IncludeBoundingBox(memory["bbox"])
+        except Exception:
+            pass
+
     Rhino.Display.DisplayPipeline.PostDrawObjects += draw
-    sc.sticky[key] = draw
+    Rhino.Display.DisplayPipeline.CalculateBoundingBox += bounds
+    sc.sticky[key] = (draw, bounds)
 
 
 def run_again_in(seconds):
@@ -353,6 +416,14 @@ except (TypeError, ValueError):
     every = DEFAULT_EVERY_S
 auto_on = bool(inp("auto", False))
 edges_on = bool(inp("edges", True))
+shading_on = bool(inp("shading", True)) and hide_grasshopper_preview("M")
+if not shading_on:
+    for param in ghenv.Component.Params.Output:
+        if param.NickName == "M":
+            try:
+                param.Hidden = False     # flat colour: let Grasshopper draw M again
+            except Exception:
+                pass
 
 
 def hidden_groups(value):
@@ -397,6 +468,7 @@ M = DataTree[object]()
 C, G = [], []
 lines = []
 draw = []
+bbox = None     # of everything drawn (a .NET struct, so it's replaced, never changed in place)
 keys = sorted(memory["blocks"].keys(), key=sort_key)
 hidden_here = [key for key in keys if group_number(key) in hide]
 for i, key in enumerate(keys):
@@ -417,17 +489,23 @@ for i, key in enumerate(keys):
         if branch_colour is None:
             branch_colour = colour
         shown = mesh.DuplicateMesh()
-        shown.VertexColors.CreateMonotoneMesh(colour)   # this is what colours the component's preview
+        shown.VertexColors.CreateMonotoneMesh(colour)   # keeps the colour when M is baked or previewed flat
         M.Add(shown, path)
-        if edges_on and block["edges"][j].Length:
-            draw.append((block["edges"][j], edge_colour(colour)))
+        edge_lines = block["edges"][j] if edges_on and block["edges"][j].Length else None
+        if shading_on:
+            draw.append((mesh, shaded_material(colour), edge_lines, edge_colour(colour)))
+            box = mesh.GetBoundingBox(False)
+            bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
+        elif edge_lines is not None:
+            draw.append((None, None, edge_lines, edge_colour(colour)))
     C.append(branch_colour or fallback)
     G.append(n if n is not None else key)
     lines.append("Group %s: published %s (%.2f MB)" % (key, local_time(block["publishedAt"]),
                                                        block["size"] / 1048576.0))
 
 memory["draw"] = draw
-install_edge_drawing(memory)
+memory["bbox"] = bbox
+install_drawing(memory)
 
 ghenv.Component.Message = "%d group%s%s" % (len(keys), "" if len(keys) == 1 else "s",
                                             ", %d hidden" % len(hidden_here) if hidden_here else "")
