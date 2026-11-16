@@ -13,19 +13,23 @@ SET-UP (once)
        auto    Type hint: bool            optional: a Boolean Toggle; publishes whenever G changes,
                                           at most once every 15 seconds
        colour  Type hint: Color           optional: colour of your cube on the screen
-       T       List Access, Type hint: str      optional: text dots to publish with your cube: their texts
-       P       List Access, Type hint: Point3d  optional: ... and where they go (one point per text; with
-                                          fewer points than texts the last point is used again, and the
-                                          other way round)
+       dots    List Access, Type hint: Guid     optional: text dots to publish with your cube, as points
+                                          referenced from Rhino (a Point parameter > Set Multiple Points);
+                                          each point's Name (Rhino: Properties > Name) is the dot's text
        server  Type hint: str             optional: overrides SERVER_URL below
        key     Type hint: str             optional: overrides WORKSHOP_KEY below
   4. Rename the output to: status
   5. Optional: right-click the component > "Create User Object..." so it's in your toolbar next time.
 
 Everything in G is published together as your group's cube (as meshes, converted to metres),
-replacing what your group published before, just like the Publish button in Rhino. Text dots go
-along too, like the Publish button's TextDots option: one for every text in T, and any text dots in
-G (referenced from Rhino, or from Rhino 8's Text Dot component). They show on the screen as labels.
+replacing what your group published before, just like the Publish button in Rhino.
+
+Text dots go along too, like the Publish button's TextDots option: every point in `dots` becomes a
+dot that shows its name, at the point (text dots in G are published as dots as well). Points work
+where text dots can't be referenced into Grasshopper without plug-ins (Rhino 7). The component
+shows each point's name as a dot in Rhino, and points without a name as an orange "no name" dot
+(those are left out). Renaming a point in Rhino updates the dot at once, and with auto on
+publishes it again.
 
 Works in Rhino 7 and Rhino 8 (Windows and Mac).
 """
@@ -45,6 +49,8 @@ WORKSHOP_KEY = "blocks-2026"
 # ---------------------------------------------------------------------------
 
 GROUPS = 8
+DOT_INK = System.Drawing.Color.FromArgb(0x1e, 0x23, 0x2a)          # dark tags, like on the class screen
+NO_NAME = System.Drawing.Color.FromArgb(0xe0, 0x8a, 0x1c)          # a point that still needs a name
 MAX_BYTES = 4 * 1024 * 1024
 AUTO_EVERY_S = 15     # auto: at most one publish per this many seconds
 
@@ -115,34 +121,88 @@ def make_dot(text, point, scale, like=None):
     return dot
 
 
-def as_point(item):
-    """A Point3d from a point, a wrapped point or a Rhino point object's id, else None."""
-    item = as_geometry(item)
-    if isinstance(item, rg.Point3d):
-        return item
-    if isinstance(item, rg.Point):
-        return item.Location
+def referenced_id(item):
+    """The Rhino object id behind an input item: a Guid (type hint Guid), or a referenced
+    Grasshopper point (no type hint). None for anything else, e.g. a plain Point3d."""
+    if isinstance(item, System.Guid):
+        return item if item != System.Guid.Empty else None
+    try:
+        if item.IsReferencedGeometry and item.ReferenceID != System.Guid.Empty:
+            return item.ReferenceID
+    except Exception:
+        pass
     return None
 
 
-def collect_dots(texts, points):
-    """Text dots in metres from T (texts) and P (points), paired up like Grasshopper's longest list.
-    Returns (dots, problem or None)."""
-    texts = [("" if t is None else str(t)) for t in (texts or [])]
-    points = [as_point(p) for p in (points or [])]
-    if any(p is None for p in points):
-        return [], "P should only hold points."
-    if not texts and not points:
-        return [], None
-    if not texts or not points:
-        return [], "Connect both T (the dots' texts) and P (where they go), or neither."
-    scale = to_metres()
-    dots = []
-    for i in range(max(len(texts), len(points))):
-        text = texts[min(i, len(texts) - 1)].strip()
-        if text:
-            dots.append(make_dot(text, points[min(i, len(points) - 1)], scale))
-    return dots, None
+def named_points(items):
+    """The Rhino points in `dots`: [(id, location in this file's units, name)], plus how many items
+    aren't referenced Rhino points. The name is the point's Name in Rhino (Properties), or ""."""
+    doc = Rhino.RhinoDoc.ActiveDoc
+    if items is not None and (isinstance(items, (System.Guid, str)) or not hasattr(items, "__iter__")):
+        items = [items]       # the input is still on Item Access: one point
+    points, bad = [], 0
+    for item in items or []:
+        ref = referenced_id(item)
+        obj = doc.Objects.FindId(ref) if ref is not None else None
+        if obj is None or obj.IsDeleted or not isinstance(obj.Geometry, rg.Point):
+            bad += 1
+            continue
+        points.append((obj.Id, obj.Geometry.Location, (obj.Attributes.Name or "").strip()))
+    return points, bad
+
+
+# ---------------------------------------------------------------- the dots in the Rhino viewport
+def previewing(component):
+    """Whether Grasshopper is showing this component's preview right now."""
+    doc = component.OnPingDocument()
+    if doc is None or component.Hidden or component.Locked:
+        return False          # deleted, preview off, or disabled
+    canvas = Grasshopper.Instances.ActiveCanvas
+    if canvas is None or canvas.Document is None or not canvas.Document.Equals(doc):
+        return False          # another Grasshopper file is open
+    try:
+        if doc.PreviewMode == Grasshopper.Kernel.GH_PreviewMode.Disabled:
+            return False
+        if doc.PreviewFilter == Grasshopper.Kernel.GH_PreviewFilter.Selected and not component.Attributes.Selected:
+            return False
+    except Exception:
+        pass
+    return True
+
+
+def install_dot_preview(memory):
+    """Show every point in `dots` as a text dot with its name in the Rhino viewports (a point
+    without a name gets an orange "no name" dot), and re-run the component when one of those points
+    is renamed, so the preview, and auto, follow the new name straight away. Re-installed on every
+    run, so the newest version of the script is the one drawing."""
+    component = ghenv.Component
+    key = "workshoplive_gh_dots_" + str(component.InstanceGuid)
+    old = sc.sticky.get(key)
+    if old is not None:
+        try:
+            Rhino.Display.DisplayPipeline.PostDrawObjects -= old[0]
+            Rhino.RhinoDoc.ModifyObjectAttributes -= old[1]
+        except Exception:
+            pass
+
+    def draw(sender, e):
+        try:
+            if memory["preview"] and previewing(component):
+                for point, text, back, fore in memory["preview"]:
+                    e.Display.DrawDot(point, text, back, fore)
+        except Exception:
+            pass    # never let a drawing problem interrupt Rhino's redraw
+
+    def renamed(sender, e):
+        try:
+            if str(e.RhinoObject.Id) in memory["dot_ids"] and component.OnPingDocument() is not None:
+                run_again_in(0)
+        except Exception:
+            pass
+
+    Rhino.Display.DisplayPipeline.PostDrawObjects += draw
+    Rhino.RhinoDoc.ModifyObjectAttributes += renamed
+    sc.sticky[key] = (draw, renamed)
 
 
 def collect(items):
@@ -269,10 +329,21 @@ ghenv.Component.Message = "Group %d" % group_number if 1 <= group_number <= GROU
 meshes, g_dots, skipped = collect(inp("G", []))
 if skipped:
     warn("%d item(s) in G aren't surfaces, polysurfaces, meshes, SubDs or text dots and were left out." % skipped)
-t_dots, dot_problem = collect_dots(inp("T", []), inp("P", []))
-if dot_problem:
-    warn(dot_problem)
-dots = g_dots + t_dots
+memory.setdefault("preview", [])
+memory.setdefault("dot_ids", set())
+points, not_points = named_points(inp("dots", []))
+if not_points:
+    warn("%d item(s) in dots aren't points referenced from Rhino and were left out. Connect a Point "
+         "parameter with points set from Rhino, and set dots' type hint to Guid." % not_points)
+unnamed = sum(1 for _, _, name in points if not name)
+if unnamed:
+    warn("%d point(s) in dots have no name, so no dot: give them one in Rhino (Properties > Name)." % unnamed)
+to_m = to_metres()
+dots = g_dots + [make_dot(name, location, to_m) for _, location, name in points if name]
+memory["dot_ids"] = set(str(i) for i, _, _ in points)
+memory["preview"] = [(location, name, DOT_INK, System.Drawing.Color.White) if name else
+                     (location, "no name", NO_NAME, System.Drawing.Color.White) for _, location, name in points]
+install_dot_preview(memory)
 
 if not 1 <= group_number <= GROUPS:
     warn("Set group to your group number (1-%d)." % GROUPS, error=True)

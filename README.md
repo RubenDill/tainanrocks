@@ -133,14 +133,15 @@ URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh
    | `push` | bool | a **Button**: each click publishes once |
    | `auto` | bool, optional | a **Boolean Toggle**: publishes whenever the geometry changes, at most once every 15 s (the last change is always sent) |
    | `colour` | Color, optional | the cube's colour on the screen; without it the group colour is used |
-   | `T` | List Access, str, optional | text dots to publish with the cube: their texts (shown on the screen as labels, like the Publish button's **TextDots** option) |
-   | `P` | List Access, Point3d, optional | where those dots go: one point per text (with fewer points than texts the last one is used again, and the other way round) |
+   | `dots` | List Access, Guid, optional | text dots to publish with the cube, as **points referenced from Rhino** (a *Point* parameter → *Set Multiple Points*): each point's **name** (Rhino: *Properties → Name*) is the dot's text |
    | `server`, `key` | str, optional | override `SERVER_URL` / `WORKSHOP_KEY` |
 
 3. Rename the output to `status`: it says what happened. The component shows the group number underneath and turns orange or red when something needs attention.
 4. Optional: right-click the component → *Create User Object…* to keep it in the toolbar.
 
-Text dots in `G` (referenced from Rhino, or from Rhino 8's Text Dot component) are published as dots too. Geometry is meshed with the file's render-mesh settings and converted to metres, so it lines up with what's published from Rhino. **auto** is limited to one publish every 15 seconds because each publish costs a few Blob operations; dragging a slider would otherwise send dozens.
+**Text dots from points.** Text dots can't be referenced into Grasshopper in Rhino 7 without plug-ins, so the component uses points instead: put a point where the dot goes, give it a name in Rhino (*Properties → Name*), and set it in the Point parameter connected to `dots` (the type hint must be **Guid**, so the script can find the point's name). Each named point is published as a text dot showing its name, like the Publish button's **TextDots** option. While the component's preview is on, Rhino shows every point's name as a dot; a point without a name shows an orange *no name* dot and is left out. Renaming a point updates its dot straight away and, with **auto** on, publishes again. Text dots in `G` (from Rhino 8's Text Dot component) are published as dots too.
+
+Geometry is meshed with the file's render-mesh settings and converted to metres, so it lines up with what's published from Rhino. **auto** is limited to one publish every 15 seconds because each publish costs a few Blob operations; dragging a slider would otherwise send dozens.
 
 ## Optional: every group inside your own Rhino
 
