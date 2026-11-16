@@ -68,6 +68,8 @@ What gets published: **only the one object you select**, so whatever else is in 
 
 Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen with only the model: every control disappears and the model fills the screen. The keys keep working, so you can switch views while presenting; moving the mouse shows an Exit button, and Esc brings the controls back. Drag to orbit (all the way round, so you can look at the bottom too), scroll to zoom.
 
+In the bottom right, the **Display**, **Environment** and **Manage** menus hold the switches below (each shows its key); **Update** (↻) and **Fullscreen** (⛶) are the two icon buttons next to them.
+
 | Key | Does |
 |---|---|
 | **1** **2** **3** **4** **5** | Combined / Exploded / One by one / Matrix / Interfaces |
