@@ -1095,6 +1095,7 @@ function setView(v, opts = {}) {
   ctxSingle.hidden = view !== 'single' && view !== 'interfaces';
   sheetEl.hidden = view !== 'interfaces';
   if (view === 'interfaces') faceSel = opts.face ?? 0;
+  renderCard();   // first: the panel is placed under whatever is in the top right, and One by one's card goes away here
   renderInterfaces();
   // The matrix reads best from the front and standing still; the other views from the corner, orbiting.
   const box = layout();
