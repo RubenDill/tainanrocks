@@ -119,18 +119,25 @@
   .label.pulse span { animation: lift 1.6s ease-out 2; }
   @keyframes lift { 0% { transform: translateY(-14px) scale(1.25); } 100% { transform: none; } }
 
-  /* history: step through every published version */
-  .history { flex: 1 1 100%; order: -1; display: flex; align-items: center; gap: 8px 10px; padding: 7px 10px;
+  /* timeline: every published version, per group, in time */
+  .history { flex: 1 1 100%; order: -1; display: grid; gap: 6px; padding: 7px 10px 8px;
     background: var(--paper); border: 1px solid var(--rule); border-radius: 7px; pointer-events: auto; font-size: 14px; }
   .history[hidden] { display: none; }
+  .tl-head { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; }
+  .tl-title { font-weight: 780; font-variation-settings: 'wdth' 115; margin-right: 4px; }
+  .seg { display: inline-flex; border: 1px solid var(--rule); border-radius: 5px; overflow: hidden; }
+  .seg button { border: 0; background: #fff; padding: 5px 10px; cursor: pointer; font-weight: 600; }
+  .seg button + button { border-left: 1px solid var(--rule); }
+  .seg button[aria-pressed="true"] { background: var(--ink); color: #fff; }
+  .tl-day { display: inline-flex; align-items: center; gap: 4px; }
+  .tl-day[hidden] { display: none; }
+  .tl-day span { min-width: 10ch; text-align: center; font-weight: 650; white-space: nowrap; }
+  .tl-head .spacer { flex: 1; }
   .step { width: 30px; height: 30px; flex: none; border: 1px solid var(--rule); background: #fff; border-radius: 5px;
     cursor: pointer; font-size: 16px; line-height: 1; padding: 0; }
   .step:hover { background: #e8ebec; }
-  .history .track { position: relative; flex: 1; min-width: 120px; height: 30px; }
-  .history .ticks { position: absolute; left: 8px; right: 8px; top: 1px; height: 9px; pointer-events: none; }
-  .history .ticks i { position: absolute; top: 0; width: 4px; height: 9px; margin-left: -2px; border-radius: 1px;
-    background: var(--c); box-shadow: 0 0 0 1px rgba(30,35,42,.18); }
-  .history input[type=range] { position: absolute; left: 0; right: 0; bottom: 0; width: 100%; margin: 0; accent-color: var(--ink); }
+  .step:disabled { opacity: .4; cursor: default; background: #fff; }
+  .step.sm { width: 26px; height: 26px; }
   .history .when { min-width: 25ch; font-variant-numeric: tabular-nums; white-space: nowrap; }
   .history .when b { font-weight: 700; }
   .history .live { border: 1px solid var(--rule); background: #fff; border-radius: 5px; padding: 5px 10px; cursor: pointer;
@@ -138,6 +145,24 @@
   .history .live[aria-pressed="true"] { background: #b3261e; border-color: #b3261e; color: #fff; }
   .history .hide { border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; padding: 0 2px 2px; cursor: pointer; }
   .history .hide:hover { color: var(--ink); }
+  .tl-chart { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; }
+  .tl-names { display: grid; grid-auto-rows: var(--row); font-size: 11.5px; line-height: var(--row); color: var(--muted); white-space: nowrap; }
+  .tl-names span { display: flex; align-items: center; gap: 5px; }
+  .tl-names i { width: 9px; height: 9px; border-radius: 2px; background: var(--c); flex: none; }
+  .tl-plot { position: relative; height: calc(var(--rows) * var(--row) + 18px); cursor: crosshair; touch-action: none;
+    border-radius: 3px; outline-offset: 2px; }
+  .tl-plot .lane { position: absolute; left: 0; right: 0; height: var(--row); }
+  .tl-plot .lane:nth-child(odd) { background: rgba(30,35,42,.035); }
+  .tl-plot .tick { position: absolute; top: 0; bottom: 14px; width: 1px; background: rgba(30,35,42,.12); }
+  .tl-plot .tick b { position: absolute; top: 100%; left: 0; transform: translateX(-50%); font-size: 10.5px; font-weight: 500;
+    color: var(--muted); white-space: nowrap; line-height: 14px; }
+  .tl-plot .future { position: absolute; top: 0; bottom: 14px; right: 0; background: rgba(246,247,245,.6); pointer-events: none; }
+  .tl-plot .dot { position: absolute; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px; border-radius: 50%; background: var(--c);
+    box-shadow: 0 0 0 1px rgba(30,35,42,.35); }
+  .tl-plot .dot.later { opacity: .3; }
+  .tl-plot .dot.now { width: 11px; height: 11px; margin: -5.5px 0 0 -5.5px; box-shadow: 0 0 0 2px #fff, 0 0 0 3.5px var(--ink); z-index: 1; }
+  .tl-plot .cursor { position: absolute; top: -3px; bottom: 11px; width: 2px; margin-left: -1px; background: #b3261e; pointer-events: none; z-index: 2; }
+  .tl-plot .empty { position: absolute; inset: 0 0 14px; display: grid; place-items: center; color: var(--muted); font-size: 13px; }
 
   /* manage the timeline */
   .manage { width: min(680px, calc(100vw - 32px)); max-height: min(82vh, 900px); padding: 18px 20px 20px; border: 1px solid var(--rule);
@@ -255,9 +280,8 @@
     .sheet { left: var(--edge); width: auto; top: max(var(--sheet-top, 150px), 46vh); }
     .sheet .detail { grid-template-columns: 1fr; }
     body[data-view="interfaces"] .keys, body[data-view="interfaces"] .credits { display: none; }   /* room for the panel */
-    .history .track { min-width: 70px; }
-    .history { flex-wrap: wrap; }
     .history .when { min-width: 0; flex-basis: 100%; order: 9; }
+    .tl-head .spacer { display: none; }
     .top { top: 16px; }
     .title { max-width: none; }
     .controls { align-items: stretch; width: 100%; }
@@ -342,16 +366,29 @@
 
 <div class="bottom">
   <div class="history" id="history" hidden>
-    <button class="step" id="hist-prev" aria-label="Previous update" title="Previous update ([)">‹</button>
-    <button class="step" id="hist-play" aria-label="Replay every update from the start" title="Replay every update from the start">▶</button>
-    <div class="track">
-      <div class="ticks" id="hist-ticks"></div>
-      <input id="hist-range" type="range" min="0" max="0" step="1" aria-label="Update history">
+    <div class="tl-head">
+      <b class="tl-title">Timeline</b>
+      <div class="seg" role="group" aria-label="Period">
+        <button type="button" data-period="day" aria-pressed="false" title="One day at a time">Day</button>
+        <button type="button" data-period="all" aria-pressed="true" title="Everything from the first update">All time</button>
+      </div>
+      <span class="tl-day" id="tl-day" hidden>
+        <button class="step sm" id="day-prev" type="button" aria-label="Previous day">‹</button>
+        <span id="day-name"></span>
+        <button class="step sm" id="day-next" type="button" aria-label="Next day">›</button>
+      </span>
+      <span class="spacer"></span>
+      <button class="step" id="hist-prev" aria-label="Previous update" title="Previous update ([)">‹</button>
+      <button class="step" id="hist-play" aria-label="Replay the updates" title="Replay the updates">▶</button>
+      <button class="step" id="hist-next" aria-label="Next update" title="Next update (])">›</button>
+      <div class="when" id="hist-when" aria-live="polite"></div>
+      <button class="live" id="hist-live" aria-pressed="true" title="Show the newest version of every group and follow new updates">● Live</button>
+      <button class="hide" id="hist-hide" type="button" aria-label="Hide the timeline" title="Hide the timeline (H)">×</button>
     </div>
-    <button class="step" id="hist-next" aria-label="Next update" title="Next update (])">›</button>
-    <div class="when" id="hist-when" aria-live="polite"></div>
-    <button class="live" id="hist-live" aria-pressed="true" title="Show the newest version of every group and follow new updates">● Live</button>
-    <button class="hide" id="hist-hide" type="button" aria-label="Hide the history bar" title="Hide the history bar (H)">×</button>
+    <div class="tl-chart">
+      <div class="tl-names" id="tl-names" aria-hidden="true"></div>
+      <div class="tl-plot" id="tl-plot" tabindex="0" role="slider" aria-label="Timeline: click or drag to go back in time; arrow keys step through the updates"></div>
+    </div>
   </div>
   <div class="left">
     <nav class="groups" id="groups" aria-label="Groups: click one to view it on its own"></nav>
@@ -372,7 +409,7 @@
     <button id="btn-section" aria-pressed="false" title="Cut the model with planes along X, Y and Z (X)"><kbd>X</kbd> Section</button>
     <button id="btn-grid" aria-pressed="false" title="5 × 5 cm reference grid on the cubes, the ground, the cuts and the drawings (G)"><kbd>G</kbd> Grid</button>
     <button id="btn-labels" aria-pressed="true" title="Show group labels (L)"><kbd>L</kbd> Labels</button>
-    <button id="btn-history" aria-pressed="true" title="Show or hide the history bar (H)"><kbd>H</kbd> History</button>
+    <button id="btn-history" aria-pressed="true" title="Show or hide the timeline (H)"><kbd>H</kbd> Timeline</button>
     <button id="btn-fit" title="Frame the view (F)"><kbd>F</kbd> Fit</button>
     <button id="btn-present" title="Fullscreen with only the model; Esc to come back (P)"><kbd>P</kbd> Fullscreen</button>
     <button id="btn-manage" title="Hide or delete published versions (M)"><kbd>M</kbd> Manage</button>
@@ -385,7 +422,7 @@
     <h2 id="manage-title">Manage the timeline</h2>
     <button class="close" type="button" id="manage-close" aria-label="Close">×</button>
   </header>
-  <p class="note">Hidden versions stay stored but disappear from the screen and the history; show them again any time.
+  <p class="note">Hidden versions stay stored but disappear from the screen and the timeline; show them again any time.
     Deleting removes the file for good.</p>
   <form class="auth" id="manage-auth" hidden>
     <label for="manage-key">Workshop passcode</label>
@@ -575,7 +612,7 @@ function recolor() {
   document.getElementById('color-name').textContent = MODE_NAMES[mode];
   layout();
   renderGroups();
-  renderHistory(true);
+  renderHistory();
   renderInterfaces();
   renderCard();
 }
@@ -1166,7 +1203,7 @@ async function poll(fresh = false, given = null) {
           .map((v) => ({ url: v.url, size: v.size, publishedAt: v.publishedAt, hidden: !!v.hidden }))
           .sort((a, b) => versionTime(a) - versionTime(b));
         if (all.length) manageData[id] = all;
-        const vs = all.filter((v) => !v.hidden);   // hidden versions stay off the screen and the history
+        const vs = all.filter((v) => !v.hidden);   // hidden versions stay off the screen and the timeline
         if (vs.length) next[id] = vs;
       }
       const keep = new Set(Object.values(next).flat().map((v) => v.url));
@@ -1257,6 +1294,7 @@ addEventListener('keydown', (e) => {
   if (manageEl.open) return;   // the Manage panel has its own keys (and a passcode field to type in)
   if (e.target.closest('button, input') && (e.key === 'Enter' || e.key === ' ')) return;
   if (e.target.matches('input') && e.key.startsWith('Arrow')) return;
+  if (e.target === tlPlot && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')) { e.preventDefault(); stepHistory(e.key === 'ArrowLeft' ? -1 : 1); return; }
   const k = e.key.toLowerCase();
   const inGroup = view === 'single' || view === 'interfaces';
   if (k >= '1' && k <= '5' && k.length === 1) setView(VIEWS[Number(k) - 1]);
@@ -1283,15 +1321,24 @@ addEventListener('keydown', (e) => {
 controls.addEventListener('start', () => { camGoal = null; controls.autoRotate = false; clearTimeout(resumeTimer); });
 controls.addEventListener('end', () => { resumeTimer = setTimeout(() => { controls.autoRotate = rotateWanted && view !== 'matrix'; }, 20000); });
 
-// ---------- history bar: step through every update
+// ---------- timeline: every update as a dot in its group's row; click or drag to go back in time
 const histEl = document.getElementById('history');
-const histRange = document.getElementById('hist-range');
-const histTicks = document.getElementById('hist-ticks');
+const tlPlot = document.getElementById('tl-plot');
+const tlNames = document.getElementById('tl-names');
 const histWhen = document.getElementById('hist-when');
 const histLive = document.getElementById('hist-live');
 const histPlay = document.getElementById('hist-play');
+const tlDay = document.getElementById('tl-day');
+const dayName = document.getElementById('day-name');
+const periodBtns = [...histEl.querySelectorAll('[data-period]')];
 let replayTimer = null;
-let ticksKey = '';
+let period = (() => { try { return localStorage.getItem('tainanrocks.timeline') === 'day' ? 'day' : 'all'; } catch { return 'all'; } })();
+let shownDay = null;   // the day in view (Day period), as a local date key; null = the day of what's on screen
+const HOUR = 3600e3, DAY = 24 * HOUR;
+const dayKey = (t) => { const d = new Date(t); return `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`; };
+const dayStart = (t) => { const d = new Date(t); d.setHours(0, 0, 0, 0); return d.getTime(); };
+const fmtDay = (t) => new Date(t).toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' });
+const fmtWhen = (t) => (dayKey(t) === dayKey(Date.now()) ? clock(t) : `${fmtDay(t)}, ${clock(t)}`);
 // Position of what's on screen in the list of updates.
 function historyIndex(updates) {
   if (historyAt === null) return updates.length - 1;
@@ -1299,42 +1346,133 @@ function historyIndex(updates) {
   updates.forEach((u, k) => { if (u.at <= historyAt) i = k; });
   return i;
 }
-function renderHistory(force = false) {
-  const updates = allUpdates();
-  histEl.hidden = !historyShown || updates.length < 2;
-  if (histEl.hidden) return;
-  const i = historyIndex(updates);
-  histRange.max = updates.length - 1;
-  histRange.value = i;
-  const key = updates.map((u) => u.id + ':' + u.idx).join() + mode;
-  if (force || key !== ticksKey) {
-    ticksKey = key;
-    histTicks.replaceChildren(...updates.map((u, k) => {
-      const t = document.createElement('i');
-      t.style.left = `${(k / (updates.length - 1)) * 100}%`;
-      t.style.setProperty('--c', mode === 'model' && blocks[u.id]?.modelColor ? blocks[u.id].modelColor : groupColor(u.id));
-      t.title = `${slotName(u.id)}, version ${u.idx + 1}, ${clock(u.at)}`;
-      return t;
-    }));
+// One row per group: the numbered groups in order, then any other names.
+function timelineRows(updates) {
+  const rows = [], index = {};
+  for (let n = 1; n <= GROUPS; n++) { index[n] = rows.length; rows.push({ name: `Group ${n}`, short: String(n), color: groupColor(String(n)) }); }
+  for (const id of [...new Set(updates.map((u) => u.id))].sort()) {
+    const n = groupNumber(id);
+    if (n && n >= 1 && n <= GROUPS) continue;
+    index[id] = rows.length;
+    rows.push({ name: slotName(id), short: n ? String(n) : id, color: groupColor(id) });
   }
-  const u = updates[i];
+  const rowOf = (id) => { const n = groupNumber(id); return n && n >= 1 && n <= GROUPS ? index[n] : index[id]; };
+  return { rows, rowOf };
+}
+// The time span drawn: all of it, or one day from the hour before its first update to the hour after its last.
+function timelineSpan(updates, cur) {
+  if (period === 'all') {
+    const t0 = updates[0].at, t1 = updates[updates.length - 1].at, pad = Math.max((t1 - t0) * 0.03, 10 * 60e3);
+    return [t0 - pad, t1 + pad];
+  }
+  const key = shownDay || dayKey(cur);
+  const on = updates.filter((u) => dayKey(u.at) === key);
+  if (!on.length) { const d = dayStart(cur); return [d + 8 * HOUR, d + 18 * HOUR]; }
+  const d = dayStart(on[0].at);
+  const t0 = Math.max(d, Math.floor(on[0].at / HOUR) * HOUR - HOUR);
+  const t1 = Math.min(d + DAY, Math.ceil(on[on.length - 1].at / HOUR) * HOUR + HOUR);
+  return [t0, Math.max(t1, t0 + 2 * HOUR)];
+}
+// Axis ticks on whole local hours or days, at most `max` of them.
+function timelineTicks(t0, t1, max) {
+  const steps = [HOUR, 2 * HOUR, 3 * HOUR, 6 * HOUR, 12 * HOUR, DAY, 2 * DAY, 7 * DAY, 14 * DAY, 28 * DAY];
+  const step = steps.find((st) => (t1 - t0) / st <= max) || steps[steps.length - 1];
+  const out = [];
+  for (let t = dayStart(t0); t <= t1; ) {
+    if (t >= t0) {
+      const midnight = new Date(t).getHours() === 0;
+      out.push({ t, label: step >= DAY || midnight ? fmtDay(t) : new Date(t).toLocaleTimeString([], { hour: 'numeric' }) });
+    }
+    if (step >= DAY) { const d = new Date(t); d.setDate(d.getDate() + step / DAY); t = d.getTime(); }
+    else { const d = new Date(t); d.setHours(d.getHours() + step / HOUR); t = d.getTime(); }   // local hours, across clock changes
+  }
+  return out;
+}
+let tlSpan = [0, 1];
+function renderHistory() {
+  const updates = allUpdates();
+  histEl.hidden = !historyShown || updates.length < 1;
+  if (histEl.hidden) return;
+  const i = historyIndex(updates), u = updates[i];
+  const cur = historyAt === null ? updates[updates.length - 1].at : u.at;
+  for (const b of periodBtns) b.setAttribute('aria-pressed', b.dataset.period === period);
+  // Day: which day, and the days either side that have updates
+  const days = [...new Set(updates.map((x) => dayKey(x.at)))];
+  const shown = shownDay || dayKey(cur);
+  tlDay.hidden = period !== 'day';
+  const firstOn = updates.find((x) => dayKey(x.at) === shown);
+  dayName.textContent = firstOn ? fmtDay(firstOn.at) : fmtDay(cur);
+  document.getElementById('day-prev').disabled = days.indexOf(shown) <= 0;
+  document.getElementById('day-next').disabled = days.indexOf(shown) >= days.length - 1;
+
+  const { rows, rowOf } = timelineRows(updates);
+  const rowH = rows.length <= 8 ? 14 : Math.max(8, Math.floor(130 / rows.length));
+  histEl.style.setProperty('--row', `${rowH}px`);
+  histEl.style.setProperty('--rows', rows.length);
+  tlNames.replaceChildren(...rows.map((r) => {
+    const el = document.createElement('span');
+    const chip = document.createElement('i');
+    chip.style.setProperty('--c', r.color);
+    el.append(chip, rowH >= 11 && innerWidth > 760 ? r.name : r.short);
+    return el;
+  }));
+
+  const [t0, t1] = tlSpan = timelineSpan(updates, cur);
+  const x = (t) => `${((t - t0) / (t1 - t0)) * 100}%`;
+  const parts = [];
+  rows.forEach((r, k) => { const l = document.createElement('div'); l.className = 'lane'; l.style.top = `${k * rowH}px`; parts.push(l); });
+  for (const tk of timelineTicks(t0, t1, Math.max(3, Math.floor(tlPlot.clientWidth / 80)))) {
+    const el = document.createElement('div');
+    el.className = 'tick'; el.style.left = x(tk.t);
+    const b = document.createElement('b'); b.textContent = tk.label; el.append(b);
+    const f = (tk.t - t0) / (t1 - t0);
+    if (f > 0.96) b.style.transform = 'translateX(-100%)'; else if (f < 0.04) b.style.transform = 'none';   // keep end labels inside
+    parts.push(el);
+  }
+  if (historyAt !== null && cur < t1) {   // what hasn't happened yet at this point
+    const f = document.createElement('div'); f.className = 'future';
+    f.style.left = x(Math.max(t0, cur)); parts.push(f);
+  }
+  const showing = new Set(Object.keys(groupVersions).map((id) => `${id}:${versionIndexAt(id, historyAt)}`));
+  let visible = 0;
+  updates.forEach((v, k) => {
+    if (v.at < t0 || v.at > t1) return;
+    visible++;
+    const d = document.createElement('i');
+    d.className = 'dot' + (k > i ? ' later' : '') + (showing.has(`${v.id}:${v.idx}`) ? ' now' : '');
+    d.style.left = x(v.at);
+    d.style.top = `${rowOf(v.id) * rowH + rowH / 2}px`;
+    d.style.setProperty('--c', mode === 'model' && blocks[v.id]?.modelColor ? blocks[v.id].modelColor : groupColor(v.id));
+    d.title = `${slotName(v.id)}, version ${v.idx + 1}, ${fmtWhen(v.at)}`;
+    parts.push(d);
+  });
+  if (!visible) { const e = document.createElement('div'); e.className = 'empty'; e.textContent = 'No updates on this day'; parts.push(e); }
+  if (cur >= t0 && cur <= t1) { const c = document.createElement('div'); c.className = 'cursor'; c.style.left = x(cur); parts.push(c); }
+  tlPlot.replaceChildren(...parts);
+  tlPlot.setAttribute('aria-valuemin', 1);
+  tlPlot.setAttribute('aria-valuemax', updates.length);
+  tlPlot.setAttribute('aria-valuenow', i + 1);
+  tlPlot.setAttribute('aria-valuetext', historyAt === null ? 'Live' : `Update ${i + 1} of ${updates.length}, ${slotName(u.id)}, ${fmtWhen(u.at)}`);
+
   const b = document.createElement('b');
   if (historyAt === null) {
     b.textContent = 'Live';
-    histWhen.replaceChildren(b, ` · ${updates.length} updates so far`);
+    histWhen.replaceChildren(b, ` · ${updates.length} ${updates.length === 1 ? 'update' : 'updates'} so far`);
   } else {
     b.textContent = `Update ${i + 1} of ${updates.length}`;
-    histWhen.replaceChildren(b, ` · ${slotName(u.id)} v${u.idx + 1} · ${clock(u.at)}`);
+    histWhen.replaceChildren(b, ` · ${slotName(u.id)} v${u.idx + 1} · ${fmtWhen(u.at)}`);
   }
   histLive.setAttribute('aria-pressed', historyAt === null);
   histPlay.textContent = replayTimer ? '❚❚' : '▶';
-  histPlay.setAttribute('aria-label', replayTimer ? 'Pause the replay' : 'Replay every update from the start');
+  histPlay.setAttribute('aria-label', replayTimer ? 'Pause the replay' : period === 'day' ? "Replay this day's updates" : 'Replay every update from the start');
+  histPlay.title = histPlay.getAttribute('aria-label');
 }
 async function goToUpdate(i) {
   const updates = allUpdates();
   if (!updates.length) return;
   i = Math.max(0, Math.min(updates.length - 1, i));
   historyAt = i === updates.length - 1 ? null : updates[i].at;
+  shownDay = null;   // the day view follows what's on screen
   renderHistory();
   if (await sync()) {
     refreshScene();
@@ -1355,23 +1493,54 @@ function stopReplay() {
   replayTimer = null;
   renderHistory();
 }
-// Replay: from the first update to now, one update per second.
+// Replay, one update per second: from the start (in Day, from the day's first update), or on from where it is.
 function startReplay() {
-  const start = historyAt === null ? 0 : historyIndex(allUpdates()) + 1;
+  const updates = allUpdates();
+  let start = historyAt === null ? 0 : historyIndex(updates) + 1;
+  if (period === 'day' && (historyAt === null || shownDay)) {
+    const key = shownDay || dayKey(updates[updates.length - 1].at);
+    start = Math.max(0, updates.findIndex((u) => dayKey(u.at) === key));
+  }
   goToUpdate(start);
   replayTimer = setInterval(() => {
-    const updates = allUpdates();
-    const i = historyIndex(updates);
-    if (historyAt === null || i >= updates.length - 1) return stopReplay();
+    const ups = allUpdates();
+    const i = historyIndex(ups);
+    if (historyAt === null || i >= ups.length - 1) return stopReplay();
     goToUpdate(i + 1);
   }, 1000);
   renderHistory();
 }
-histRange.oninput = () => { const i = Number(histRange.value); stopReplay(); goToUpdate(i); };
+// Click or drag on the chart: the newest update at or before that moment.
+function scrubTo(clientX) {
+  const r = tlPlot.getBoundingClientRect();
+  const t = tlSpan[0] + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * (tlSpan[1] - tlSpan[0]);
+  const updates = allUpdates();
+  let i = 0;
+  updates.forEach((u, k) => { if (u.at <= t) i = k; });
+  if (i !== historyIndex(updates) || historyAt === null) { stopReplay(); goToUpdate(i); }
+}
+tlPlot.onpointerdown = (e) => { tlPlot.setPointerCapture(e.pointerId); scrubTo(e.clientX); };
+tlPlot.onpointermove = (e) => { if (tlPlot.hasPointerCapture(e.pointerId)) scrubTo(e.clientX); };
 document.getElementById('hist-prev').onclick = () => stepHistory(-1);
 document.getElementById('hist-next').onclick = () => stepHistory(1);
 histLive.onclick = () => { stopReplay(); goToUpdate(Infinity); };
 histPlay.onclick = () => (replayTimer ? stopReplay() : startReplay());
+for (const b of periodBtns) b.onclick = () => {
+  period = b.dataset.period;
+  shownDay = null;
+  try { localStorage.setItem('tainanrocks.timeline', period); } catch { /* private mode: just this visit */ }
+  renderHistory();
+};
+function stepDay(d) {   // look at the previous or next day that has updates (what's on screen stays)
+  const updates = allUpdates();
+  const days = [...new Set(updates.map((u) => dayKey(u.at)))];
+  const cur = historyAt === null ? updates[updates.length - 1].at : updates[historyIndex(updates)].at;
+  const k = days.indexOf(shownDay || dayKey(cur)) + d;
+  if (k >= 0 && k < days.length) { shownDay = days[k]; renderHistory(); }
+}
+document.getElementById('day-prev').onclick = () => stepDay(-1);
+document.getElementById('day-next').onclick = () => stepDay(1);
+addEventListener('resize', () => renderHistory());
 
 // ---------- sun: position from place, date and time (NOAA's approximation, within a fraction of a degree)
 const ctxSun = document.getElementById('ctx-sun');
@@ -2584,7 +2753,7 @@ function setGrid(on) {
 }
 btnGrid.onclick = () => setGrid(!gridOn);
 
-// ---------- history bar on/off (H), remembered in this browser
+// ---------- timeline on/off (H), remembered in this browser
 const btnHistory = document.getElementById('btn-history');
 let historyShown = (() => { try { return localStorage.getItem('tainanrocks.history') !== 'hidden'; } catch { return true; } })();
 function setHistoryShown(on) {
@@ -2669,7 +2838,7 @@ function renderCard() {
   const color = chipColor(slot);
   let body;
   if (!b) {
-    body = `<p class="empty">${historyAt === null ? 'Not published yet.' : 'Not published yet at this point in the history.'}</p>`;
+    body = `<p class="empty">${historyAt === null ? 'Not published yet.' : 'Not published yet at this point in the timeline.'}</p>`;
   } else {
     const st = meshStats(b.raw);
     const boxVol = b.size.x * b.size.y * b.size.z;
@@ -2818,7 +2987,7 @@ function renderManage() {
   }).join('');
   manageList.querySelectorAll('[data-act]').forEach((b) => { b.onclick = () => manageAction(b); });
   manageList.querySelectorAll('[data-see]').forEach((b) => {
-    b.onclick = () => {   // jump the history to that version
+    b.onclick = () => {   // jump the timeline to that version
       const updates = allUpdates();
       const i = updates.findIndex((u) => u.id === b.dataset.see && groupVersions[u.id][u.idx].url === b.dataset.url);
       manageEl.close();
