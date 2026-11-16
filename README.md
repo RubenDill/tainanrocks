@@ -14,7 +14,7 @@ Every publish is kept, so the **history bar** can step back through the session,
 Rhino (each group)                 Vercel                          Class screen (browser)
 WorkshopPublish.py  ── .3dm ──▶  /api/publish ──▶ Blob storage ◀── index.html polls /api/state
                                                                    every 5 s, loads changed groups
-Rhino (optional)    ◀───────────  /api/state  (WorkshopSync.py pulls everything into Rhino)
+Grasshopper (optional) ◀────────  /api/state  (WorkshopPull.py pulls every group into Rhino)
 ```
 
 ## What's in here
@@ -27,7 +27,7 @@ Rhino (optional)    ◀───────────  /api/state  (WorkshopS
 | `lib/manifest.js` | Shared storage logic |
 | `rhino/WorkshopPublish.py` | The Publish button for students (Rhino 7 and 8, Windows and Mac) |
 | `grasshopper/WorkshopPush.py` | The same from Grasshopper: a script component that pushes geometry straight to the screen |
-| `rhino/WorkshopSync.py` | Optional: shows all published pieces inside your own Rhino |
+| `grasshopper/WorkshopPull.py` | Optional: a script component that pulls every group's latest piece into Grasshopper, in the group colours |
 
 ## Set up (once, about 10 minutes)
 
@@ -37,7 +37,7 @@ Rhino (optional)    ◀───────────  /api/state  (WorkshopS
 4. **Set the passcode.** Settings → Environment Variables → add `WORKSHOP_KEY` with any passcode you like (e.g. `blocks-2026`).
 5. **Redeploy** (Deployments → ⋯ → Redeploy) so the new storage and passcode are picked up.
 6. **Open your URL.** You should see the view switcher, eight empty group chips and "No groups yet."
-7. **Edit the Rhino scripts.** At the top of `rhino/WorkshopPublish.py` and `rhino/WorkshopSync.py`, set:
+7. **Edit the Rhino scripts.** At the top of `rhino/WorkshopPublish.py` (and `grasshopper/WorkshopPush.py` / `WorkshopPull.py` if you use them), set:
    ```python
    SERVER_URL = "https://your-project.vercel.app"
    WORKSHOP_KEY = "blocks-2026"      # publish script only
@@ -137,9 +137,24 @@ URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh
 
 Geometry is meshed with the file's render-mesh settings and converted to metres, so it lines up with what's published from Rhino. **auto** is limited to one publish every 15 seconds because each publish costs a few Blob operations; dragging a slider would otherwise send dozens.
 
-## Optional: blocks inside your own Rhino
+## Optional: every group inside your own Rhino
 
-Run `WorkshopSync.py` on the presentation laptop. Each group arrives on its own layer `Workshop Live::3` and is replaced whenever that group publishes. Run it again to stop. Don't model on those layers.
+`grasshopper/WorkshopPull.py` is a Grasshopper Python script component that downloads the latest published version of every group and shows them in the Rhino viewport, each in its group colour (the same colours as the class screen). Set `SERVER_URL` at its top.
+
+1. Drop a Python script component on the canvas (Rhino 7: *GhPython Script*; Rhino 8: *Python 3 Script* or *IronPython 2 Script*), open it and paste the whole file in.
+2. Inputs, all optional (zoom in on the component to add and rename them):
+
+   | Input | Type hint | What it is |
+   |---|---|---|
+   | `refresh` | bool | a **Button**: each click checks the server for new versions |
+   | `auto` | bool | a **Boolean Toggle**: checks by itself every `every` seconds |
+   | `every` | int | seconds between automatic checks (default 30, at least 10) |
+   | `colours` | str | `group` (default), `model` (the colours the groups published with) or `white` |
+   | `server` | str | overrides `SERVER_URL` |
+
+3. Outputs: `M` (the meshes, one branch per group: `{1}`, `{2}`, …), `C` (one colour per branch), `G` (the group number of each branch) and `status`.
+
+The component's own preview already shows each group in its colour, because the colour is stored on the meshes; for transparency or materials, turn its preview off and connect `M` and `C` to a *Custom Preview*. Bake `M` to keep a copy in the Rhino file. The pieces arrive at their real coordinates, scaled from the published metres to your file's units, so they sit in the template. Versions hidden in **Manage** are left out. Only new versions are downloaded, and a check reads the same cached list as the class screen, so a new publish can take up to a minute to appear (pressing **Update** on the screen speeds that up). Don't model on top of it: these are the published meshes, not the groups' working files.
 
 ## Managing the timeline
 
