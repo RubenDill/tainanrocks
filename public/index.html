@@ -1688,6 +1688,12 @@ function interfaceDrawing(gid, c) {
   }
   strokeEdges(mine.edges, [], 2.6);          // this cube's edges in the plane
   strokeEdges(theirs.edges, [10, 7], 2);     // the neighbour's, dashed
+  // the sheet in the 3D view stops here: no boxes or measurements there
+  const plain = document.createElement('canvas');
+  plain.width = W; plain.height = H;
+  const pctx = plain.getContext('2d');
+  pctx.drawImage(out, 0, 0);
+  pctx.strokeStyle = '#1e232a'; pctx.lineWidth = 2; pctx.strokeRect(1, 1, W - 2, H - 2);
   // every connecting area gets its bounding box, measured
   const mPerPx = (u1 - u0) / W;
   const openings = openAreas(openPx, W, H, Math.max(4, Math.round(0.01 / mPerPx)));   // skip slivers under 1 cm
@@ -1709,7 +1715,7 @@ function interfaceDrawing(gid, c) {
   }
   octx.strokeStyle = '#1e232a'; octx.lineWidth = 2; octx.strokeRect(1, 1, W - 2, H - 2);
   const px = (u1 - u0) * (v1 - v0) / (W * H);
-  const result = { canvas: out, rect, right, up, colG, colH, w: u1 - u0, h: v1 - v0, face: (u1 - u0) * (v1 - v0),
+  const result = { canvas: out, plain, rect, right, up, colG, colH, w: u1 - u0, h: v1 - v0, face: (u1 - u0) * (v1 - v0),
     touch: nT * px, open: nO * px, gOnly: nG * px, hOnly: nH * px };
   drawCache.set(key, result);
   if (drawCache.size > 60) drawCache.delete(drawCache.keys().next().value);
@@ -1735,7 +1741,7 @@ function buildFaceSheets(gid, list = [], drawings = []) {
     geo.setAttribute('position', new THREE.Float32BufferAttribute(corners.flatMap((p) => [p.x, p.y, p.z]), 3));
     geo.setAttribute('uv', new THREE.Float32BufferAttribute([0, 0, 1, 0, 1, 1, 0, 1], 2));
     geo.setIndex([0, 1, 2, 0, 2, 3]);
-    const tex = new THREE.CanvasTexture(d.canvas);
+    const tex = new THREE.CanvasTexture(d.plain);
     tex.colorSpace = THREE.SRGBColorSpace;
     tex.anisotropy = MAX_ANISO;
     const on = i === faceSel;
