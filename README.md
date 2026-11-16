@@ -8,7 +8,7 @@ Each group designs one piece (a cube) in Rhino and presses **Publish**. The clas
 - **Matrix**: every group's piece side by side in a grid, with empty spots for groups that haven't published
 - **Interfaces**: a group's cube with the cubes it touches, pulled apart, with each shared face drawn in the gap; click a face to see in 2D where the cubes touch and where their voids connect, with the areas
 
-Every publish is kept, so the **history bar** can step back through the session, version by version, or replay it. **Sun** (S) lights the model with the real sun for any date and time in Tainan, with long shadows, the sun's path and a compass. **Animals** (A) brings the structure to life with chibi Taiwanese wildlife.
+Every publish is kept, so the **timeline** can step back through the session, version by version, or replay it. **Sun** (S) lights the model with the real sun for any date and time in Tainan, with long shadows, the sun's path and a compass. **Animals** (A) brings the structure to life with chibi Taiwanese wildlife.
 
 ```
 Rhino (each group)                 Vercel                          Class screen (browser)
@@ -69,11 +69,13 @@ What gets published: **only the one object you select**, so whatever else is in 
 
 Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen with only the model: every control disappears and the model fills the screen. The keys keep working, so you can switch views while presenting; moving the mouse shows an Exit button, and Esc brings the controls back. Drag to orbit (all the way round, so you can look at the bottom too), scroll to zoom.
 
+In the bottom right, the **Display**, **Environment** and **Manage** menus hold the switches below (each shows its key); **Update** (↻) and **Fullscreen** (⛶) are the two icon buttons next to them.
+
 | Key | Does |
 |---|---|
 | **1** **2** **3** **4** **5** | Combined / Exploded / One by one / Matrix / Interfaces |
 | **←** **→** | Previous / next group (opens One by one) |
-| **[** **]** | Previous / next update in the history |
+| **[** **]** | Previous / next update on the timeline |
 | **S** | Sun on/off |
 | **A** | Animals on/off |
 | **R** | Slow orbit on/off (dragging pauses it for 20 s; the matrix never orbits) |
@@ -85,11 +87,11 @@ Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen w
 | **L** | Group labels and text dots |
 | **F** | Fit the view |
 | **P** | Fullscreen with only the model (Esc to come back) |
-| **H** | Show or hide the history bar |
-| **M** | Manage the timeline: hide or delete published versions |
+| **H** | Show or hide the timeline |
+| **M** | File viewer: show, hide or delete published versions |
 | **U** | Update: load the newest models now (see below) |
 
-**Click a cube** for its card: size, volume, void (share of its bounding box left empty), estimated weight in concrete (2.4 t/m³), surface area, which cubes it touches and over how much area, triangle count and file size, plus buttons for One by one and Interfaces. The card also **downloads the published .3dm files**: this version, all versions of the group (zip), or every group as shown (zip; when you're looking back in the history, the versions of that moment). These are the files the Publish button sent, so meshes in metres, not the students' working files. Volume needs a closed model; otherwise the card says so. Clicking empty space or **Esc** closes it.
+**Click a cube** for its card: size, volume, void (share of its bounding box left empty), estimated weight in concrete (2.4 t/m³), surface area, which cubes it touches and over how much area, triangle count and file size, plus buttons for One by one and Interfaces. The card also **downloads the published .3dm files**: this version, all versions of the group (zip), or every group as shown (zip; when you're looking back on the timeline, the versions of that moment). These are the files the Publish button sent, so meshes in metres, not the students' working files. Volume needs a closed model; otherwise the card says so. Clicking empty space or **Esc** closes it.
 
 **Text dots** that a group published with its cube (the **TextDots** option) float on it like Rhino's own dots: dark tags (in the dot's own colour with model colours), always on top and the same size on screen in every view. They move with the cube, are cut away by a section, and **L** hides them together with the group labels.
 
@@ -103,7 +105,7 @@ Clicking a group chip at the bottom left opens that group in One by one with its
 
 The address keeps the current view, so you can bookmark one: `…/#matrix`, `…/#exploded`, `…/#single-3`, `…/#interfaces-3`.
 
-**History.** The bar above the group chips has a tick for every publish, in the group's colour. Drag the slider, use ‹ › or **[** **]**, or press ▶ to replay the session one update per second. Everything follows the point in time you pick, the interface drawings included; the status line says you're looking back. **● Live** returns to the newest version of every group. The × at the end of the bar (or **H**) hides it; the browser remembers that. The server keeps the last 100 versions per group.
+**Timeline.** The bar above the group chips has a row for every group and a dot, in the group's colour, for every publish. **Day** shows one day at a time (‹ › next to the date move between days that have updates); **All time** shows the whole session. Click or drag on the chart to go back to that moment: the red line marks it, later updates fade, and a ring marks the version each group is showing. Or use ‹ › or **[** **]**, or press ▶ to replay one update per second (in Day, that day's updates). Everything follows the point in time you pick, the interface drawings included; the status line says you're looking back. **● Live** returns to the newest version of every group. It starts hidden: **H** (or the Timeline button) opens it and × hides it again; the browser remembers which. The server keeps the last 100 versions per group.
 
 **Sun.** Date and time sliders set the sun for Tainan (latitude 22.99°, longitude 120.21°, UTC+8); ▶ plays the day from 5:00 to 19:30. The model's +Y is taken as north. The orange arc is the sun's path that day, the grey ring the horizon.
 
@@ -117,7 +119,7 @@ The address keeps the current view, so you can bookmark one: `…/#matrix`, `…
 
 A solid line shows this cube's edges in the plane, a dashed line the neighbour's. Next to it are the areas in m² and as a share of the shared face: solid surface touching, voids connecting, each one-sided area, and how much of each cube's voids on that face open into the other's. Areas are counted on a fine raster (about 0.6 mm per pixel on a 0.45 m face). Faces count as touching when the cubes' bounding boxes sit within 3% of a cube's size of each other. **Print** prints the selected face's drawing and numbers.
 
-URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` the starting separation (1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone, `?grid=1` with the reference grid on. Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
+URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh interval in seconds, `?groups=8` the number of groups, `?explode=1` the starting separation (1 = each piece moves its own distance from the centre again; 0–3), `?view=matrix` the starting view, `?colors=model` (or `white`) the starting colours, `?rock=1` starts in stone, `?grid=1` with the reference grid on, `?labels=1` with the group labels on, `?timeline=1` with the timeline open (labels and timeline start off). Sun: `?sun=1` starts with the sun on, `?day=172&time=15:00` (day of the year, 1–365) the moment, `?lat=…&lon=…&tz=…&place=…` another location, `?north=30` if north in the Rhino model is turned 30° anticlockwise from +Y.
 
 ## Publishing from Grasshopper
 
@@ -168,12 +170,12 @@ The component draws the cubes like the class screen: shaded in each group's colo
 
 ## Managing the timeline
 
-**Manage** (M) lists every group with all its published versions, newest first. It asks for the workshop passcode (`WORKSHOP_KEY`) the first time, and remembers it until the browser tab is closed.
+**File viewer** (M) lists every group with all its published versions, newest first. It asks for the workshop passcode (`WORKSHOP_KEY`) the first time, and remembers it until the browser tab is closed.
 
-- **Hide** takes a version off the screen and out of the history, but keeps the file; **Unhide** brings it back. Under the hood the file is renamed to `….hidden.3dm`, so nothing else needs to remember what's hidden.
+- **Hide** takes a version off the screen and off the timeline, but keeps the file; **Unhide** brings it back. Under the hood the file is renamed to `….hidden.3dm`, so nothing else needs to remember what's hidden.
 - **Hide all** hides a whole group (its chip goes empty); a new publish from that group shows up again as usual.
 - **Delete** removes a version for good, **Delete group** a group with all its versions; both ask first.
-- **Show on screen** jumps the history to that version.
+- **Show on screen** jumps the timeline to that version.
 
 Each action costs a few advanced Blob operations (a listing, the change and the rebuilt list).
 
@@ -193,7 +195,7 @@ curl -X DELETE "https://your-project.vercel.app/api/publish?block=3" -H "x-works
 - The screen reads the server about 10 times a minute no matter how many browsers are open, well inside the free read allowance. Close the viewer outside class hours.
 - Those reads go through Vercel's cache, which can be up to a minute behind, so a new publish takes up to a minute to appear by itself. **Update** (U) skips the cache: it lists the stored models and rebuilds the list from them, which costs 2 advanced Blob operations per press. Pressing it a few dozen times a session is fine; don't script it.
 - Uploads are capped at 4 MB per group (Vercel's request limit is 4.5 MB). Massing models are usually well under 1 MB.
-- Every version is kept (up to 100 per group) for the history, so storage grows with each publish: 8 groups × 100 versions × 200 KB is 160 MB. Check the storage your Vercel plan includes. Clear everything between workshops (see below).
+- Every version is kept (up to 100 per group) for the timeline, so storage grows with each publish: 8 groups × 100 versions × 200 KB is 160 MB. Check the storage your Vercel plan includes. Clear everything between workshops (see below).
 
 ## Troubleshooting
 
