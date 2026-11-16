@@ -14,9 +14,12 @@ Your cube has to be one object: join its parts into one polysurface or mesh,
 or make a block of them. Surfaces, polysurfaces, extrusions, SubDs and meshes
 work; blocks are exploded into meshes when published.
 
-Options on the command line let you change the group number or turn on
+Options on the command line let you change the group number, turn on
 "PublishOnSave", which publishes the object you published last every time you
-press Ctrl+S.
+press Ctrl+S, and turn on "TextDots", which publishes the text dots inside your
+cube along with it (dots within its bounding box, or up to 3 cm outside it, and
+dots that are part of it when it's a block). They show on the class screen as
+labels.
 
 Each group publishes as its number ("1".."8"), which is the group chip with
 the same number on the class screen. Geometry is converted to meters, so
@@ -42,6 +45,7 @@ SECTION = "WorkshopLive"
 STICKY_HANDLER = "workshoplive_publish_on_save"
 MAX_BYTES = 4 * 1024 * 1024
 MAX_DEPTH = 8  # nested block definitions
+DOT_MARGIN_M = 0.03   # text dots this far outside the cube's bounding box still count as on it
 
 
 # ---------------------------------------------------------------- settings
@@ -142,23 +146,85 @@ def collect_meshes(doc, geom, xform, color, mp, out, depth=0):
     out.append((joined, color))
 
 
-def build_file(doc, obj, group):
-    """Write the one selected object, as meshes in metres, to a temporary .3dm. Returns (path, meshes)."""
+def moved_dot(dot, xform):
+    """A copy of a text dot with its point transformed (the text keeps its size on screen)."""
+    copy = rg.TextDot(dot.Text, xform * dot.Point)
+    try:
+        copy.FontHeight = dot.FontHeight
+        copy.FontFace = dot.FontFace
+    except Exception:
+        pass
+    return copy
+
+
+def dots_in_block(doc, geom, xform, out, depth=0):
+    """Append (dot, color) for every text dot inside a block (and the blocks inside it)."""
+    if not isinstance(geom, rg.InstanceReferenceGeometry) or depth >= MAX_DEPTH:
+        return
+    idef = doc.InstanceDefinitions.FindId(geom.ParentIdefId)
+    if idef is None:
+        return
+    child_xform = xform * geom.Xform
+    for child in idef.GetObjects():
+        if isinstance(child.Geometry, rg.TextDot):
+            out.append((moved_dot(child.Geometry, child_xform), child.Attributes.DrawColor(doc)))
+        else:
+            dots_in_block(doc, child.Geometry, child_xform, out, depth + 1)
+
+
+def collect_dots(doc, obj, to_m):
+    """The text dots that go with the cube, in metres: the visible dots in the file that sit inside
+    its bounding box (or up to DOT_MARGIN_M outside it), and the dots inside it if it's a block."""
+    scale = rg.Transform.Scale(rg.Point3d.Origin, to_m)
+    out = []
+    dots_in_block(doc, obj.Geometry, scale, out)
+    box = obj.Geometry.GetBoundingBox(True)
+    if not box.IsValid:
+        return out
+    pad = DOT_MARGIN_M / to_m
+    box = rg.BoundingBox(rg.Point3d(box.Min.X - pad, box.Min.Y - pad, box.Min.Z - pad),
+                         rg.Point3d(box.Max.X + pad, box.Max.Y + pad, box.Max.Z + pad))
+    settings = Rhino.DocObjects.ObjectEnumeratorSettings()
+    settings.ObjectTypeFilter = Rhino.DocObjects.ObjectType.TextDot
+    settings.HiddenObjects = False
+    settings.LockedObjects = True
+    settings.VisibleFilter = True
+    for dot_obj in doc.Objects.GetObjectList(settings):
+        dot = dot_obj.Geometry
+        if isinstance(dot, rg.TextDot) and box.Contains(dot.Point):
+            out.append((moved_dot(dot, scale), dot_obj.Attributes.DrawColor(doc)))
+    return out
+
+
+def add_dot(f, dot, attr):
+    try:
+        return f.Objects.AddTextDot(dot, attr)
+    except Exception:
+        return f.Objects.AddTextDot(dot.Text, dot.Point, attr)
+
+
+def build_file(doc, obj, group, with_dots=False):
+    """Write the one selected object, as meshes in metres, to a temporary .3dm (with the text dots on
+    it if with_dots). Returns (path, meshes, dots)."""
     to_m = Rhino.RhinoMath.UnitScale(doc.ModelUnitSystem, Rhino.UnitSystem.Meters)
     parts = []
     collect_meshes(doc, obj.Geometry, rg.Transform.Scale(rg.Point3d.Origin, to_m),
                    obj.Attributes.DrawColor(doc), meshing_parameters(doc), parts)
+    dots = collect_dots(doc, obj, to_m) if with_dots and parts else []
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
-    for mesh, color in parts:
+    for geometry, color in parts + dots:
         attr = Rhino.DocObjects.ObjectAttributes()
         attr.ColorSource = Rhino.DocObjects.ObjectColorSource.ColorFromObject
         attr.ObjectColor = color
-        f.Objects.AddMesh(mesh, attr)
+        if isinstance(geometry, rg.TextDot):
+            add_dot(f, geometry, attr)
+        else:
+            f.Objects.AddMesh(geometry, attr)
     path = os.path.join(System.IO.Path.GetTempPath(), "workshoplive_group%d.3dm" % group)
     if not f.Write(path, 7):
         raise Exception("could not write the temporary file %s" % path)
-    return path, len(parts)
+    return path, len(parts), len(dots)
 
 
 # ---------------------------------------------------------------- network
@@ -189,7 +255,8 @@ def publish(doc, group, obj):
     if "your-project" in SERVER_URL.lower():
         return False, "The instructor still needs to set SERVER_URL at the top of WorkshopPublish.py."
     Rhino.RhinoApp.WriteLine("Workshop Live: preparing Group %d..." % group)
-    path, meshes = build_file(doc, obj, group)
+    with_dots = get_setting(doc, "textdots") == "1"
+    path, meshes, dots = build_file(doc, obj, group, with_dots)
     if meshes == 0:
         return False, ("That object can't be published: select your cube itself (a polysurface, surface, "
                        "extrusion, SubD, mesh or block), not a curve, point or text.")
@@ -209,6 +276,8 @@ def publish(doc, group, obj):
         set_setting(doc, "object", str(obj.Id))   # Enter and PublishOnSave reuse it
         on_screen = result.get("blocksPublished")
         extra = ", %d groups on the screen" % on_screen if on_screen else ""
+        if with_dots:
+            extra = ", %d text dot%s%s" % (dots, "" if dots == 1 else "s", extra)
         return True, "Published Group %d to the class screen (%.2f MB%s)." % (group, size / 1048576.0, extra)
     return False, "Publish failed (%s): %s" % (status, result.get("error", "unknown error"))
 
@@ -271,6 +340,7 @@ def main():
     while True:
         last = saved_object(doc)
         auto = Rhino.Input.Custom.OptionToggle(get_setting(doc, "autopublish") == "1", "Off", "On")
+        with_dots = Rhino.Input.Custom.OptionToggle(get_setting(doc, "textdots") == "1", "Off", "On")
         number = Rhino.Input.Custom.OptionInteger(group, 1, GROUPS)
         go = Rhino.Input.Custom.GetObject()
         go.SetCommandPrompt("Select your cube to publish as Group %d%s" % (
@@ -281,6 +351,7 @@ def main():
         go.AcceptNothing(last is not None)
         opt_group = go.AddOptionInteger("Group", number)
         opt_auto = go.AddOptionToggle("PublishOnSave", auto)
+        opt_dots = go.AddOptionToggle("TextDots", with_dots)
         res = go.Get()   # Get (not GetMultiple): exactly one object
 
         if res == Rhino.Input.GetResult.Option:
@@ -292,6 +363,10 @@ def main():
             elif go.OptionIndex() == opt_auto:
                 set_setting(doc, "autopublish", "1" if auto.CurrentValue else "0")
                 Rhino.RhinoApp.WriteLine("Workshop Live: publish on save is %s." % ("on" if auto.CurrentValue else "off"))
+            elif go.OptionIndex() == opt_dots:
+                set_setting(doc, "textdots", "1" if with_dots.CurrentValue else "0")
+                Rhino.RhinoApp.WriteLine("Workshop Live: text dots on your cube are %s." % (
+                    "published with it" if with_dots.CurrentValue else "left out"))
             continue
         if res == Rhino.Input.GetResult.Nothing and last is not None:
             obj = last

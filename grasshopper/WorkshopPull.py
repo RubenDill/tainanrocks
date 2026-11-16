@@ -18,6 +18,7 @@ SET-UP (once)
                                   and hide several groups
        edges    Type hint: bool   optional: False turns the edge lines off (they're on by default)
        shading  Type hint: bool   optional: False draws the cubes in flat colour, without light
+       dots     Type hint: bool   optional: False hides the text dots groups published with their cube
        server   Type hint: str    overrides SERVER_URL below
   4. Set up the outputs:
        M       the meshes, one branch per group ({1}, {2}, ...), already coloured
@@ -32,7 +33,9 @@ wherever the surface turns by more than 28 degrees, so the outline of every void
 It follows the component's preview: hide the component and the cubes go too. Grasshopper's own
 (flat) preview of M is switched off for this. For transparency or other materials, turn the
 component's preview off and connect M and C to a Custom Preview (with a Create Material in between).
-Bake M to keep a copy in Rhino (the meshes carry their colour).
+Bake M to keep a copy in Rhino (the meshes carry their colour). Text dots that a group published
+with its cube (the TextDots option of the Publish button) show like Rhino's own dots, as dark tags
+(in their own colour with colours = "model").
 
 Only versions that are new since the last check are downloaded. Models arrive at their real
 coordinates and are scaled from the published metres to this Rhino file's units, so they line up
@@ -68,6 +71,7 @@ EDGE_INK = "#1e232a"   # the class screen's edge lines: this ink at 55% over the
 EDGE_OPACITY = 0.55
 CREASE_DEG = 28        # an edge is drawn where the faces meet at more than this (EdgesGeometry(g, 28))
 EDGE_THICKNESS = 1     # pixels, like the screen's WebGL lines
+DOT_INK = "#1e232a"    # text dots: dark tags, like on the class screen
 SHADE_GLOW = 0.25      # share of the colour that shows even where no light falls
 
 
@@ -114,6 +118,13 @@ def group_colour(key):
 
 def is_black(c):
     return c.R == 0 and c.G == 0 and c.B == 0
+
+
+def text_on(c):
+    """Dark or white text, whichever reads on this colour (the class screen's rule)."""
+    lin = lambda v: (v / 255.0) / 12.92 if v <= 10 else ((v / 255.0 + 0.055) / 1.055) ** 2.4
+    light = 0.2126 * lin(c.R) + 0.7152 * lin(c.G) + 0.0722 * lin(c.B)
+    return hex_colour(DOT_INK) if light > 0.18 else System.Drawing.Color.White
 
 
 def edge_colour(surface):
@@ -198,7 +209,8 @@ def as_mesh(geom):
 
 
 def load_model(url):
-    """Download one published .3dm. Returns [(mesh in this file's units, published colour or None)]."""
+    """Download one published .3dm. Returns (parts, dots): [(mesh in this file's units, published
+    colour or None)] and [(point in this file's units, text, published colour or None)]."""
     f = read_3dm(http_get(url))
     if f is None:
         raise Exception("not a readable .3dm file")
@@ -208,8 +220,12 @@ def load_model(url):
     doc = Rhino.RhinoDoc.ActiveDoc
     scale = Rhino.RhinoMath.UnitScale(units, doc.ModelUnitSystem) if doc is not None else 1.0
     xform = rg.Transform.Scale(rg.Point3d.Origin, scale)
-    parts = []
+    parts, dots = [], []
     for obj in f.Objects:
+        if isinstance(obj.Geometry, rg.TextDot):
+            if obj.Geometry.Text:
+                dots.append((xform * obj.Geometry.Point, obj.Geometry.Text, object_colour(f, obj.Attributes)))
+            continue
         mesh = as_mesh(obj.Geometry)
         if mesh is None or mesh.Faces.Count == 0:
             continue
@@ -217,7 +233,7 @@ def load_model(url):
             mesh.Transform(xform)
         mesh.Normals.ComputeNormals()
         parts.append((mesh, object_colour(f, obj.Attributes)))
-    return parts
+    return parts, dots
 
 
 def local_time(iso):
@@ -246,13 +262,13 @@ def check_server(memory, server):
             blocks[key] = old
             continue
         try:
-            parts = load_model(url)
+            parts, dots = load_model(url)
         except Exception as ex:
             problems.append("Group %s: download failed (%s)" % (key, ex))
             if old is not None:
                 blocks[key] = old       # keep showing the version we had
             continue
-        blocks[key] = {"url": url, "parts": parts, "publishedAt": entry.get("publishedAt", ""),
+        blocks[key] = {"url": url, "parts": parts, "dots": dots, "publishedAt": entry.get("publishedAt", ""),
                        "size": entry.get("size") or 0}
     memory["blocks"] = blocks
     return problems
@@ -359,7 +375,7 @@ def install_drawing(memory):
 
     def draw(sender, e):
         try:
-            if not memory["draw"] or not previewing(component):
+            if not (memory["draw"] or memory.get("dots")) or not previewing(component):
                 return
             for mesh, material, lines, ink in memory["draw"]:   # all surfaces first, then all lines
                 if mesh is not None:
@@ -372,12 +388,14 @@ def install_drawing(memory):
                 except Exception:
                     for line in lines:
                         e.Display.DrawLine(line, ink, EDGE_THICKNESS)
+            for point, text, back, fore in memory.get("dots") or []:   # always on top, like Rhino's dots
+                e.Display.DrawDot(point, text, back, fore)
         except Exception:
             pass    # never let a drawing problem interrupt Rhino's redraw
 
     def bounds(sender, e):
         try:   # so Rhino's near and far clipping planes leave room for the cubes
-            if memory.get("bbox") is not None and memory["draw"] and previewing(component):
+            if memory.get("bbox") is not None and (memory["draw"] or memory.get("dots")) and previewing(component):
                 e.IncludeBoundingBox(memory["bbox"])
         except Exception:
             pass
@@ -416,6 +434,7 @@ except (TypeError, ValueError):
     every = DEFAULT_EVERY_S
 auto_on = bool(inp("auto", False))
 edges_on = bool(inp("edges", True))
+dots_on = bool(inp("dots", True))
 shading_on = bool(inp("shading", True)) and hide_grasshopper_preview("M")
 if not shading_on:
     for param in ghenv.Component.Params.Output:
@@ -468,6 +487,7 @@ M = DataTree[object]()
 C, G = [], []
 lines = []
 draw = []
+dots = []
 bbox = None     # of everything drawn (a .NET struct, so it's replaced, never changed in place)
 keys = sorted(memory["blocks"].keys(), key=sort_key)
 hidden_here = [key for key in keys if group_number(key) in hide]
@@ -498,12 +518,21 @@ for i, key in enumerate(keys):
             bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
         elif edge_lines is not None:
             draw.append((None, None, edge_lines, edge_colour(colour)))
+    block_dots = block.get("dots") or []      # versions loaded by an earlier script have none
+    if dots_on:
+        for point, text, published in block_dots:
+            back = published if mode == "model" and published is not None and not is_black(published) else hex_colour(DOT_INK)
+            dots.append((point, text, back, text_on(back)))
+            box = rg.BoundingBox(point, point)
+            bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
     C.append(branch_colour or fallback)
     G.append(n if n is not None else key)
-    lines.append("Group %s: published %s (%.2f MB)" % (key, local_time(block["publishedAt"]),
-                                                       block["size"] / 1048576.0))
+    lines.append("Group %s: published %s (%.2f MB%s)" % (
+        key, local_time(block["publishedAt"]), block["size"] / 1048576.0,
+        ", %d text dot%s" % (len(block_dots), "" if len(block_dots) == 1 else "s") if block_dots else ""))
 
 memory["draw"] = draw
+memory["dots"] = dots
 memory["bbox"] = bbox
 install_drawing(memory)
 

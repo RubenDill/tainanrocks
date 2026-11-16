@@ -61,8 +61,9 @@ Grasshopper (optional) ◀────────  /api/state  (WorkshopPull.py
    On Mac: `! _-RunPythonScript "/Users/you/Documents/WorkshopPublish.py"`
 3. Click it. The first time it asks which group you are (it remembers this in the Rhino file). Then **select your cube**: one object, and only that object is published. Next time, **Enter** publishes the same object again. Click **Group** on the command line to change the number.
 4. Optional: click **PublishOnSave** on the command line to turn it **On**. Every Ctrl+S then publishes the object you published last. After restarting Rhino, click the button once to re-arm it.
+5. Optional: click **TextDots** on the command line to turn it **On**. The text dots on your cube are then published with it, and show on the screen as labels (Rhino: *Dot* command). A dot counts as on your cube when it sits inside the cube's bounding box or up to 3 cm outside it; dots inside a block you publish count too. Hidden dots and dots on hidden layers stay out. The setting is saved in the file, like the group number.
 
-What gets published: **only the one object you select**, so whatever else is in your file stays out. Your cube therefore has to be one object: join its parts into one polysurface or mesh (Join or BooleanUnion), or make a block of them. Surfaces, polysurfaces, extrusions, SubDs, meshes and blocks work; curves, points and text don't. Locked objects can't be selected, so unlock your cube first. Cubes over 4 MB are refused with a message saying so.
+What gets published: **only the one object you select**, so whatever else is in your file stays out. Your cube therefore has to be one object: join its parts into one polysurface or mesh (Join or BooleanUnion), or make a block of them. Surfaces, polysurfaces, extrusions, SubDs, meshes and blocks work; curves, points and text don't. Locked objects can't be selected, so unlock your cube first. Text dots only go along with the **TextDots** option (see above). Cubes over 4 MB are refused with a message saying so.
 
 ## On the screen
 
@@ -81,7 +82,7 @@ Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen w
 | **X** | Section: cut the model with planes along X, Y and Z |
 | **G** | 5 × 5 cm reference grid |
 | **Esc** | Close the cube's card |
-| **L** | Group labels |
+| **L** | Group labels and text dots |
 | **F** | Fit the view |
 | **P** | Fullscreen with only the model (Esc to come back) |
 | **H** | Show or hide the history bar |
@@ -89,6 +90,8 @@ Open your Vercel URL and press **P** (or the Fullscreen button) for fullscreen w
 | **U** | Update: load the newest models now (see below) |
 
 **Click a cube** for its card: size, volume, void (share of its bounding box left empty), estimated weight in concrete (2.4 t/m³), surface area, which cubes it touches and over how much area, triangle count and file size, plus buttons for One by one and Interfaces. The card also **downloads the published .3dm files**: this version, all versions of the group (zip), or every group as shown (zip; when you're looking back in the history, the versions of that moment). These are the files the Publish button sent, so meshes in metres, not the students' working files. Volume needs a closed model; otherwise the card says so. Clicking empty space or **Esc** closes it.
+
+**Text dots** that a group published with its cube (the **TextDots** option) float on it like Rhino's own dots: dark tags (in the dot's own colour with model colours), always on top and the same size on screen in every view. They move with the cube, are cut away by a section, and **L** hides them together with the group labels.
 
 Clicking a group chip at the bottom left opens that group in One by one with its card. Each chip shows when the group last published; a dot marks the ones published in the last 90 seconds.
 
@@ -153,6 +156,7 @@ Geometry is meshed with the file's render-mesh settings and converted to metres,
    | `hide` | int | a **Number Slider** (integers, 0 to 8): the group to hide; 0 shows every group. Set the input to List Access to plug in several sliders and hide several groups |
    | `edges` | bool | `False` turns the edge lines off (on by default) |
    | `shading` | bool | `False` draws the cubes in flat colour, without light (shaded by default) |
+   | `dots` | bool | `False` hides the text dots published with the cubes (shown by default) |
    | `server` | str | overrides `SERVER_URL` |
 
 3. Outputs: `M` (the meshes, one branch per group: `{1}`, `{2}`, …), `C` (one colour per branch), `G` (the group number of each branch) and `status`.
