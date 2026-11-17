@@ -20,7 +20,7 @@ SET-UP (once)
        shading  Type hint: bool   optional: False draws the cubes in flat colour, without light
        dots     Type hint: bool   optional: False hides the text dots groups published with their cube
        negative Type hint: bool   optional: True shows, very ghosted, the objects that cut each cube's
-                                  voids (published as negative space); off by default
+                                  voids (published as negative space), with their names; off by default
        server   Type hint: str    overrides SERVER_URL below
   4. Set up the outputs:
        M       the meshes, one branch per group ({1}, {2}, ...), already coloured
@@ -77,7 +77,7 @@ DOT_INK = "#1e232a"    # text dots: dark tags, like on the class screen
 SHADE_GLOW = 0.25      # share of the colour that shows even where no light falls
 NEGATIVE_TAG = ("workshoplive", "negative")   # negative space is marked with this user text
 GHOST_TRANSPARENCY = 0.88           # very ghosted, like the class screen (12% opaque)
-CACHE_VERSION = 3                   # versions loaded by an earlier script are loaded again
+CACHE_VERSION = 4                   # versions loaded by an earlier script are loaded again
 
 
 def inp(name, default=None):
@@ -214,9 +214,9 @@ def as_mesh(geom):
 
 
 def load_model(url):
-    """Download one published .3dm. Returns (parts, dots, ghosts): [(mesh in this file's units,
-    published colour or None)], [(point in this file's units, text, published colour or None)] and
-    the negative space, like the parts."""
+    """Download one published .3dm. Returns (parts, dots, ghosts, ghost_dots): [(mesh in this file's
+    units, published colour or None)], [(point in this file's units, text, published colour or None)],
+    the negative space like the parts, and the names of the negative space like the dots."""
     f = read_3dm(http_get(url))
     if f is None:
         raise Exception("not a readable .3dm file")
@@ -226,12 +226,13 @@ def load_model(url):
     doc = Rhino.RhinoDoc.ActiveDoc
     scale = Rhino.RhinoMath.UnitScale(units, doc.ModelUnitSystem) if doc is not None else 1.0
     xform = rg.Transform.Scale(rg.Point3d.Origin, scale)
-    parts, dots, ghosts = [], [], []
+    parts, dots, ghosts, ghost_dots = [], [], [], []
     for obj in f.Objects:
         negative = is_negative(f, obj.Attributes)
         if isinstance(obj.Geometry, rg.TextDot):
-            if obj.Geometry.Text and not negative:
-                dots.append((xform * obj.Geometry.Point, obj.Geometry.Text, object_colour(f, obj.Attributes)))
+            if obj.Geometry.Text:
+                (ghost_dots if negative else dots).append(
+                    (xform * obj.Geometry.Point, obj.Geometry.Text, object_colour(f, obj.Attributes)))
             continue
         mesh = as_mesh(obj.Geometry)
         if mesh is None or mesh.Faces.Count == 0:
@@ -240,7 +241,7 @@ def load_model(url):
             mesh.Transform(xform)
         mesh.Normals.ComputeNormals()
         (ghosts if negative else parts).append((mesh, object_colour(f, obj.Attributes)))
-    return parts, dots, ghosts
+    return parts, dots, ghosts, ghost_dots
 
 
 def is_negative(f, attrs):
@@ -279,13 +280,14 @@ def check_server(memory, server):
             blocks[key] = old
             continue
         try:
-            parts, dots, ghosts = load_model(url)
+            parts, dots, ghosts, ghost_dots = load_model(url)
         except Exception as ex:
             problems.append("Group %s: download failed (%s)" % (key, ex))
             if old is not None:
                 blocks[key] = old       # keep showing the version we had
             continue
-        blocks[key] = {"url": url, "parts": parts, "dots": dots, "ghosts": ghosts, "v": CACHE_VERSION,
+        blocks[key] = {"url": url, "parts": parts, "dots": dots, "ghosts": ghosts, "ghost_dots": ghost_dots,
+                       "v": CACHE_VERSION,
                        "publishedAt": entry.get("publishedAt", ""), "size": entry.get("size") or 0}
     memory["blocks"] = blocks
     return problems
@@ -575,6 +577,10 @@ for i, key in enumerate(keys):
                                pale(edge_colour(tint), 0.6)))
             box = mesh.GetBoundingBox(False)
             bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
+    if negative_on:   # the names of the negative space: pale tags in its tint, like on the class screen
+        for point, text, published in block.get("ghost_dots") or []:
+            back = pale(published if mode == "model" and published is not None and not is_black(published) else fallback)
+            dots.append((point, text, back, text_on(back)))
     block_dots = block.get("dots") or []      # versions loaded by an earlier script have none
     if dots_on:
         for point, text, published in block_dots:

@@ -61,7 +61,7 @@ Grasshopper (optional) ◀────────  /api/state  (WorkshopPull.py
 3. Click it. The first time it asks which group you are (it remembers this in the Rhino file). Then **select your cube**: one object, and only that object is published. Next time, **Enter** publishes the same object again. Click **Group** on the command line to change the number.
 4. Optional: click **PublishOnSave** on the command line to turn it **On**. Every Ctrl+S then publishes the object you published last. After restarting Rhino, click the button once to re-arm it.
 5. Optional: click **TextDots** on the command line to turn it **On**. The text dots on your cube are then published with it, and show on the screen as labels (Rhino: *Dot* command). A dot counts as on your cube when it sits inside the cube's bounding box or up to 3 cm outside it; dots inside a block you publish count too. Hidden dots and dots on hidden layers stay out. The setting is saved in the file, like the group number.
-6. Optional: click **NegativeSpace** on the command line and select the objects that cut your cube's voids (the cutters you used in BooleanDifference: run it with *DeleteInput=No* to keep them). From then on they're published with your cube, meshed, on a layer of their own, and the screen can show them very ghosted (**N**). The choice is saved in the file, so you can hide the cutters afterwards and Enter and PublishOnSave still send them. Click **NegativeSpace** again and press Enter without selecting anything to stop.
+6. Optional: click **NegativeSpace** on the command line and select the objects that cut your cube's voids (the cutters you used in BooleanDifference: run it with *DeleteInput=No* to keep them). From then on they're published with your cube, meshed, on a layer of their own, and the screen can show them very ghosted (**N**). The choice is saved in the file, so you can hide the cutters afterwards and Enter and PublishOnSave still send them. A cutter with a name (*Properties → Name*) shows it on the screen as a text dot in its centre, together with the negative space. Click **NegativeSpace** again and press Enter without selecting anything to stop.
 
 What gets published: **only the one object you select**, so whatever else is in your file stays out. Your cube therefore has to be one object: join its parts into one polysurface or mesh (Join or BooleanUnion), or make a block of them. Surfaces, polysurfaces, extrusions, SubDs, meshes and blocks work; curves, points and text don't. Locked objects can't be selected, so unlock your cube first. Text dots only go along with the **TextDots** option (see above). Cubes over 4 MB are refused with a message saying so.
 
@@ -96,7 +96,7 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 
 **Text dots** that a group published with its cube (the **TextDots** option) float on it like Rhino's own dots: dark tags (in the dot's own colour with model colours), always on top and the same size on screen in every view. They move with the cube, are cut away by a section, and **L** hides them together with the group labels.
 
-**Negative space** (N, in the Display menu) shows the objects a group published as its negative space (the **NegativeSpace** option): the shapes that cut the cube's voids, very ghosted in a pale tint of the group colour with faint edges, where they were in Rhino. They're never part of the cube: size, volume, voids, interfaces, sections, the grid and clicking only count the cube itself. Off when the page opens (`?negative=1` starts with it on).
+**Negative space** (N, in the Display menu) shows the objects a group published as its negative space (the **NegativeSpace** option): the shapes that cut the cube's voids, very ghosted in a pale tint of the group colour with faint edges, where they were in Rhino. Objects that had a name in Rhino show it as a pale text dot in their centre; these come and go with the negative space, not with the labels (L). They're never part of the cube: size, volume, voids, interfaces, sections, the grid and clicking only count the cube itself. Off when the page opens (`?negative=1` starts with it on).
 
 Clicking a group chip at the bottom left opens that group in One by one with its card. Each chip shows when the group last published; a dot marks the ones published in the last 90 seconds.
 
@@ -139,7 +139,7 @@ URL options: `?title=Studio%20Rotterdam` sets the heading, `?poll=5` the refresh
    | `auto` | bool, optional | a **Boolean Toggle**: publishes whenever the geometry changes, at most once every 15 s (the last change is always sent) |
    | `colour` | Color, optional | the cube's colour on the screen; without it the group colour is used |
    | `dots` | List Access, Guid, optional | text dots to publish with the cube, as **points referenced from Rhino** (a *Point* parameter → *Set Multiple Points*): each point's **name** (Rhino: *Properties → Name*) is the dot's text |
-   | `negative` | List Access, GeometryBase, optional | the objects that cut the cube's voids: published with it as **negative space** (like the Publish button's **NegativeSpace** option), which the screen can show very ghosted (**N**) |
+   | `negative` | List Access, Guid, optional | the objects that cut the cube's voids, referenced from Rhino (a *Geometry* parameter → *Set Multiple Geometries*): published with it as **negative space** (like the Publish button's **NegativeSpace** option), which the screen can show very ghosted (**N**). A named object (Rhino: *Properties → Name*) shows its name as a text dot in its centre. Grasshopper-made geometry works too with type hint *GeometryBase*, but has no name |
    | `server`, `key` | str, optional | override `SERVER_URL` / `WORKSHOP_KEY` |
 
 3. Rename the output to `status`: it says what happened. The component shows the group number underneath and turns orange or red when something needs attention.
@@ -166,7 +166,7 @@ Geometry is meshed with the file's render-mesh settings and converted to metres,
    | `edges` | bool | `False` turns the edge lines off (on by default) |
    | `shading` | bool | `False` draws the cubes in flat colour, without light (shaded by default) |
    | `dots` | bool | `False` hides the text dots published with the cubes (shown by default) |
-   | `negative` | bool | `True` shows the published negative space, very ghosted (off by default, like on the screen) |
+   | `negative` | bool | `True` shows the published negative space, very ghosted, with the names of its objects (off by default, like on the screen) |
    | `server` | str | overrides `SERVER_URL` |
 
 3. Outputs: `M` (the meshes, one branch per group: `{1}`, `{2}`, …), `C` (one colour per branch), `G` (the group number of each branch) and `status`.

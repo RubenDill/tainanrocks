@@ -16,9 +16,12 @@ SET-UP (once)
        dots    List Access, Type hint: Guid     optional: text dots to publish with your cube, as points
                                           referenced from Rhino (a Point parameter > Set Multiple Points);
                                           each point's Name (Rhino: Properties > Name) is the dot's text
-       negative  List Access, Type hint: GeometryBase  optional: the objects that cut your cube's voids;
-                                          published with it as negative space, which the class
-                                          screen can show very ghosted (N)
+       negative  List Access, Type hint: Guid  optional: the objects that cut your cube's voids, referenced
+                                          from Rhino (a Geometry parameter > Set Multiple Geometries);
+                                          published with it as negative space, which the class screen
+                                          can show very ghosted (N). Each one's Name (Rhino: Properties >
+                                          Name) shows as a text dot in its centre. Grasshopper-made
+                                          geometry works too (type hint GeometryBase), without names
        server  Type hint: str             optional: overrides SERVER_URL below
        key     Type hint: str             optional: overrides WORKSHOP_KEY below
   4. Rename the output to: status
@@ -33,6 +36,10 @@ where text dots can't be referenced into Grasshopper without plug-ins (Rhino 7).
 shows each point's name as a dot in Rhino, and points without a name as an orange "no name" dot
 (those are left out). Renaming a point in Rhino updates the dot at once, and with auto on
 publishes it again.
+
+Negative space can carry names the same way: a named object in `negative` gets a text dot with
+its name at the centre of its bounding box, shown on the class screen with the negative space (N)
+and in Rhino while the component's preview is on (pale grey, unlike the dark `dots`).
 
 Works in Rhino 7 and Rhino 8 (Windows and Mac).
 """
@@ -57,6 +64,7 @@ NEGATIVE_LAYER = "Negative space"   # negative space goes on this layer, for any
 NEGATIVE_TAG = ("workshoplive", "negative")   # ... and is marked with this user text, which is what counts
 DOT_INK = System.Drawing.Color.FromArgb(0x1e, 0x23, 0x2a)          # dark tags, like on the class screen
 NO_NAME = System.Drawing.Color.FromArgb(0xe0, 0x8a, 0x1c)          # a point that still needs a name
+GHOST_DOT = System.Drawing.Color.FromArgb(0xe4, 0xe7, 0xea)        # the names of negative space: pale
 MAX_BYTES = 4 * 1024 * 1024
 AUTO_EVERY_S = 15     # auto: at most one publish per this many seconds
 
@@ -140,14 +148,38 @@ def referenced_id(item):
     return None
 
 
+def as_list(items):
+    """An input's items as a list, also when the input is still on Item Access."""
+    if items is None:
+        return []
+    if isinstance(items, (System.Guid, str)) or not hasattr(items, "__iter__"):
+        return [items]
+    return list(items)
+
+
+def negative_names(items):
+    """The named objects in `negative`: [(id, centre of its bounding box in this file's units, name)].
+    Only objects referenced from Rhino have a name (type hint Guid); the rest are left out here."""
+    doc = Rhino.RhinoDoc.ActiveDoc
+    out = []
+    for item in as_list(items):
+        ref = referenced_id(item)
+        obj = doc.Objects.FindId(ref) if ref is not None else None
+        if obj is None or obj.IsDeleted:
+            continue
+        name = (obj.Attributes.Name or "").strip()
+        box = obj.Geometry.GetBoundingBox(True)
+        if name and box.IsValid:
+            out.append((obj.Id, box.Center, name))
+    return out
+
+
 def named_points(items):
     """The Rhino points in `dots`: [(id, location in this file's units, name)], plus how many items
     aren't referenced Rhino points. The name is the point's Name in Rhino (Properties), or ""."""
     doc = Rhino.RhinoDoc.ActiveDoc
-    if items is not None and (isinstance(items, (System.Guid, str)) or not hasattr(items, "__iter__")):
-        items = [items]       # the input is still on Item Access: one point
     points, bad = [], 0
-    for item in items or []:
+    for item in as_list(items):
         ref = referenced_id(item)
         obj = doc.Objects.FindId(ref) if ref is not None else None
         if obj is None or obj.IsDeleted or not isinstance(obj.Geometry, rg.Point):
@@ -262,7 +294,7 @@ def add_layer(f, name, colour):
         return f.AllLayers.Count - 1
 
 
-def write_3dm(meshes, dots, colour, group, ghosts=()):
+def write_3dm(meshes, dots, colour, group, ghosts=(), ghost_dots=()):
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
     # The cube gets a layer of its own, made first: objects land on a file's first layer unless told
@@ -275,6 +307,14 @@ def write_3dm(meshes, dots, colour, group, ghosts=()):
             attr.LayerIndex = layer
             attr.SetUserString(NEGATIVE_TAG[0], NEGATIVE_TAG[1])
             f.Objects.AddMesh(m, attr)
+        for d in ghost_dots:   # the names of the negative space, also tagged: shown with it, not the cube
+            attr = Rhino.DocObjects.ObjectAttributes()
+            attr.LayerIndex = layer
+            attr.SetUserString(NEGATIVE_TAG[0], NEGATIVE_TAG[1])
+            try:
+                f.Objects.AddTextDot(d, attr)
+            except Exception:
+                f.Objects.AddTextDot(d.Text, d.Point, attr)
     for m in meshes:
         attr = Rhino.DocObjects.ObjectAttributes()
         attr.LayerIndex = cube_layer
@@ -315,11 +355,11 @@ def http_post(url, data, key):
         return status, System.IO.StreamReader(ex.Response.GetResponseStream()).ReadToEnd()
 
 
-def publish(meshes, dots, ghosts, group, colour, server, key):
+def publish(meshes, dots, ghosts, ghost_dots, group, colour, server, key):
     """Returns (ok, message)."""
     if "your-project" in server.lower():
         return False, "Set SERVER_URL at the top of the script (or connect the server input)."
-    path = write_3dm(meshes, dots, colour, group, ghosts)
+    path = write_3dm(meshes, dots, colour, group, ghosts, ghost_dots)
     size = os.path.getsize(path)
     if size > MAX_BYTES:
         return False, "Group %d's geometry is %.1f MB; the limit is 4 MB. Simplify it and push again." % (group, size / 1048576.0)
@@ -331,7 +371,7 @@ def publish(meshes, dots, ghosts, group, colour, server, key):
     if status == 200 and result.get("ok"):
         extra = ", %d text dot%s" % (len(dots), "" if len(dots) == 1 else "s") if dots else ""
         if ghosts:
-            extra += ", negative space"
+            extra += ", negative space%s" % (" (%d named)" % len(ghost_dots) if ghost_dots else "")
         return True, "Published Group %d at %s (%.2f MB%s)." % (group, time.strftime("%H:%M:%S"), size / 1048576.0, extra)
     return False, "Publish failed (%s): %s" % (status, result.get("error", "unknown error"))
 
@@ -359,8 +399,8 @@ server_url = str(inp("server", SERVER_URL) or SERVER_URL)
 workshop_key = str(inp("key", WORKSHOP_KEY) or WORKSHOP_KEY)
 ghenv.Component.Message = "Group %d" % group_number if 1 <= group_number <= GROUPS else "no group"
 
-meshes, g_dots, skipped = collect(inp("G", []))
-ghosts, _, ghost_skipped = collect(inp("negative", []))
+meshes, g_dots, skipped = collect(as_list(inp("G", [])))
+ghosts, _, ghost_skipped = collect(as_list(inp("negative", [])))
 if ghost_skipped:
     warn("%d item(s) in negative aren't surfaces, polysurfaces, meshes or SubDs and were left out." % ghost_skipped)
 if skipped:
@@ -376,9 +416,12 @@ if unnamed:
     warn("%d point(s) in dots have no name, so no dot: give them one in Rhino (Properties > Name)." % unnamed)
 to_m = to_metres()
 dots = g_dots + [make_dot(name, location, to_m) for _, location, name in points if name]
-memory["dot_ids"] = set(str(i) for i, _, _ in points)
+named_negative = negative_names(inp("negative", [])) if ghosts else []
+ghost_dots = [make_dot(name, centre, to_m) for _, centre, name in named_negative]
+memory["dot_ids"] = set(str(i) for i, _, _ in points + named_negative)   # renaming one re-runs the component
 memory["preview"] = [(location, name, DOT_INK, System.Drawing.Color.White) if name else
                      (location, "no name", NO_NAME, System.Drawing.Color.White) for _, location, name in points]
+memory["preview"] += [(centre, name, GHOST_DOT, DOT_INK) for _, centre, name in named_negative]
 install_dot_preview(memory)
 
 if not 1 <= group_number <= GROUPS:
@@ -387,7 +430,7 @@ if not 1 <= group_number <= GROUPS:
 elif not meshes:
     status = "Connect your cube (Breps, meshes or SubDs) to G."
 else:
-    signature = fingerprint(meshes + ghosts, dots, "%d|%s|%d" % (group_number, colour_value, len(ghosts)))
+    signature = fingerprint(meshes + ghosts, dots + ghost_dots, "%d|%s|%d" % (group_number, colour_value, len(ghosts)))
     wanted = bool(inp("push", False))
     if not wanted and inp("auto", False) and signature != memory["fingerprint"]:
         wait = AUTO_EVERY_S - (time.time() - memory["time"])
@@ -398,7 +441,7 @@ else:
             run_again_in(wait)
     if wanted:
         try:
-            ok, message = publish(meshes, dots, ghosts, group_number, colour_value, server_url, workshop_key)
+            ok, message = publish(meshes, dots, ghosts, ghost_dots, group_number, colour_value, server_url, workshop_key)
         except Exception as ex:
             ok, message = False, "Publish failed: %s" % ex
         memory["time"] = time.time()

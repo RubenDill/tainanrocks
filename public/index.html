@@ -697,6 +697,7 @@ async function buildGroup(id, url) {
   const group = new THREE.Group();
   const ghost = new THREE.Group();   // negative space: kept apart, so it never counts as the cube
   const dots = [];   // text dots, made into sprites once the model's box is measured
+  const ghostDots = [];   // the names of the negative space: dots shown with it (N)
   let firstColor;
 
   function addGhost(rmesh, modelColor) {
@@ -752,7 +753,11 @@ async function buildGroup(id, url) {
         const faces = geo.faces();
         for (let f = 0; f < faces.count; f++) { const m = faces.get(f).getMesh(rhino.MeshType.Any); if (m) add(m, modelColor); }
       } else if (negative) {
-        // only surfaces and meshes show as negative space
+        // negative space: surfaces and meshes, and text dots with the names of its objects
+        if ((type === rhino.ObjectType.TextDot || (rhino.TextDot && geo instanceof rhino.TextDot)) && geo.text) {
+          const p = geo.point;
+          ghostDots.push({ text: geo.text, p: [p[0], p[1], p[2]], color: modelColor, ghost: true, id });
+        }
       } else if (type === rhino.ObjectType.Curve) {
         const pts = [];
         if (typeof geo.point === 'function' && geo.pointCount > 1) {
@@ -775,7 +780,7 @@ async function buildGroup(id, url) {
   group.scale.setScalar(scale);
   group.updateMatrixWorld(true);
   ghost.scale.setScalar(scale);
-  return { raw: group, modelColor: firstColor ?? null, dots, ghost: ghost.children.length ? ghost : null };
+  return { raw: group, modelColor: firstColor ?? null, dots, ghostDots, ghost: ghost.children.length || ghostDots.length ? ghost : null };
 }
 
 // ---------- versions
@@ -785,14 +790,17 @@ const groupVersions = {};   // id -> [{ url, size, publishedAt }]
 const modelCache = {};      // url -> Promise<{ raw, box, center, size, modelColor }>
 function loadModel(id, url) {
   if (!modelCache[url]) {
-    const p = buildGroup(id, url).then(({ raw, modelColor, dots, ghost }) => {
+    const p = buildGroup(id, url).then(({ raw, modelColor, dots, ghostDots, ghost }) => {
       const box = new THREE.Box3().setFromObject(raw);
       const center = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
       const size = box.isEmpty() ? new THREE.Vector3() : box.getSize(new THREE.Vector3());
       raw.position.copy(center).negate();   // hang the model around its centre inside the holder
       const cage = box.isEmpty() ? null : makeCage(box, center);   // the grid on its six planes
       for (const d of dots || []) raw.add(makeDot(d));   // after the box, so dots never change its size
-      if (ghost) { ghost.position.copy(raw.position); ghost.visible = negativeOn; ghostGroups.add(ghost); }
+      if (ghost) {
+        ghost.position.copy(raw.position); ghost.visible = negativeOn; ghostGroups.add(ghost);
+        for (const d of ghostDots || []) ghost.add(makeDot(d));
+      }
       return { raw, box, center, size, modelColor, cage, ghost };
     });
     p.catch(() => { if (modelCache[url] === p) delete modelCache[url]; });
@@ -807,7 +815,11 @@ function disposeModel(url) {
     m.cage?.geometry.dispose();
     if (m.ghost) {
       ghostGroups.delete(m.ghost);
-      m.ghost.traverse((o) => { o.geometry?.dispose(); if (o.material && o.material !== ghostEdgeMat) o.material.dispose(); });
+      m.ghost.traverse((o) => {
+        if (o.isSprite) { o.material.map?.dispose(); o.material.dispose(); dotSprites.delete(o); return; }   // shares three's quad
+        o.geometry?.dispose();
+        if (o.material && o.material !== ghostEdgeMat) o.material.dispose();
+      });
     }
     m.raw.traverse((o) => {
       if (o.isSprite) { o.material.map?.dispose(); o.material.dispose(); dotSprites.delete(o); return; }   // shares three's quad
@@ -821,7 +833,10 @@ function paint(id, raw, ghost) {
     if (o.isMesh) o.material.color.copy(surfaceColor(id, o.userData.modelColor));
     else if (o.userData.dot) drawDot(o);
   });
-  ghost?.traverse((o) => { if (o.isMesh) o.material.color.set(ghostColor(id, o.userData.modelColor)); });
+  ghost?.traverse((o) => {
+    if (o.isMesh) o.material.color.set(ghostColor(id, o.userData.modelColor));
+    else if (o.userData.dot) drawDot(o);
+  });
 }
 
 // ---------- negative space (N): the objects that cut each cube's voids, published with the cube
@@ -869,7 +884,9 @@ function drawDot(sprite) {
   const h = lines.length * lh + 2 * padY;
   canvas.width = w * r; canvas.height = h * r;   // resets the context
   ctx.scale(r, r);
-  const bg = mode === 'model' && color ? color : DOT_INK;
+  // dark tags; the names of the negative space pale, in its ghost tint
+  const bg = sprite.userData.dot.ghost ? `#${ghostColor(sprite.userData.dot.id, color).getHexString()}`
+    : mode === 'model' && color ? color : DOT_INK;
   ctx.fillStyle = bg;
   ctx.beginPath();
   if (ctx.roundRect) ctx.roundRect(0, 0, w, h, 4); else ctx.rect(0, 0, w, h);
@@ -900,8 +917,8 @@ function sizeDots() {
   if (!dotSprites.size) return;
   const k = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / (renderer.domElement.clientHeight || innerHeight);
   for (const sprite of dotSprites) {
-    sprite.visible = labelsShown;
-    if (!sprite.parent || !labelsShown) continue;
+    sprite.visible = labelsShown || !!sprite.userData.dot.ghost;   // negative space's names go with it (N), not with L
+    if (!sprite.parent || !sprite.visible) continue;
     const parent = Math.max(1e-9, sprite.parent.getWorldScale(dotScaleTmp).x);
     sprite.scale.set(sprite.userData.px[0] * k / parent, sprite.userData.px[1] * k / parent, 1);
   }

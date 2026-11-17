@@ -24,7 +24,8 @@ labels.
 "NegativeSpace" lets you pick the objects that cut your cube's voids (the
 cutters of a BooleanDifference, say). They're published with every publish
 after that, on a layer of their own, and the class screen can show them very
-ghosted (N). They can be hidden in Rhino once picked; pick again with nothing
+ghosted (N). A cutter with a name (Properties > Name) shows it as a text dot in
+its centre. They can be hidden in Rhino once picked; pick again with nothing
 selected (Enter) to stop publishing them.
 
 Each group publishes as its number ("1".."8"), which is the group chip with
@@ -277,10 +278,14 @@ def build_file(doc, obj, group, with_dots=False, negative=()):
     parts = []
     collect_meshes(doc, obj.Geometry, to_m_xform, obj.Attributes.DrawColor(doc), mp, parts)
     dots = collect_dots(doc, obj, to_m) if with_dots and parts else []
-    ghosts = []
+    ghosts, ghost_dots = [], []
     for other in negative:
         if other.Id != obj.Id:
             collect_meshes(doc, other.Geometry, to_m_xform, other.Attributes.DrawColor(doc), mp, ghosts)
+            name = (other.Attributes.Name or "").strip()
+            box = other.Geometry.GetBoundingBox(True)
+            if name and box.IsValid:   # its name, as a text dot in its centre, shown with the negative space
+                ghost_dots.append(rg.TextDot(name, to_m_xform * box.Center))
     f = Rhino.FileIO.File3dm()
     f.Settings.ModelUnitSystem = Rhino.UnitSystem.Meters
     # The cube gets a layer of its own, made first: objects land on a file's first layer unless told
@@ -295,6 +300,11 @@ def build_file(doc, obj, group, with_dots=False, negative=()):
             attr.ObjectColor = color
             attr.SetUserString(NEGATIVE_TAG[0], NEGATIVE_TAG[1])
             f.Objects.AddMesh(mesh, attr)
+        for dot in ghost_dots:
+            attr = Rhino.DocObjects.ObjectAttributes()
+            attr.LayerIndex = layer
+            attr.SetUserString(NEGATIVE_TAG[0], NEGATIVE_TAG[1])
+            add_dot(f, dot, attr)
     for geometry, color in parts + dots:
         attr = Rhino.DocObjects.ObjectAttributes()
         attr.LayerIndex = cube_layer
