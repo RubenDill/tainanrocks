@@ -1902,13 +1902,21 @@ for (const k of ['N', 'E', 'S', 'W']) {
   compass[k] = new CSS2DObject(el);
   scene.add(compass[k]);
 }
+const SUN_CLEARANCE = 1.3;   // the sun path's distance from the model's farthest corner, as a factor
 let sunPathKey = '';
 function updateSunPath() {
   sunGroup.visible = sunOn;
   for (const l of Object.values(compass)) l.element.classList.toggle('show', sunOn);
   if (!sunOn) return;
+  // The path is a dome centred on the ground under the model: its radius reaches past the model's
+  // farthest corner (the top ones) by SUN_CLEARANCE, so the path never runs through the geometry.
   const c = currentBounds.getCenter(new THREE.Vector3()).setZ(0);
-  const R = Math.max(currentBounds.getSize(new THREE.Vector3()).length() * 0.62, nominal * 1.2);
+  const corner = new THREE.Vector3();
+  let reach = 0;
+  for (const x of [currentBounds.min.x, currentBounds.max.x])
+    for (const y of [currentBounds.min.y, currentBounds.max.y])
+      for (const z of [currentBounds.min.z, currentBounds.max.z]) reach = Math.max(reach, corner.set(x, y, z).distanceTo(c));
+  const R = Math.max(reach * SUN_CLEARANCE, nominal * 1.2);
   const key = `${sunDay}|${R.toFixed(3)}|${c.x.toFixed(3)}|${c.y.toFixed(3)}`;
   if (key !== sunPathKey) {
     sunPathKey = key;
