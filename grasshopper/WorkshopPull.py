@@ -46,6 +46,7 @@ pressing Update on the class screen rebuilds that list straight away.
 
 Works in Rhino 7 and Rhino 8 (Windows and Mac).
 """
+import colorsys
 import json
 import math
 import time
@@ -76,7 +77,7 @@ EDGE_THICKNESS = 1     # pixels, like the screen's WebGL lines
 DOT_INK = "#1e232a"    # text dots: dark tags, like on the class screen
 SHADE_GLOW = 0.25      # share of the colour that shows even where no light falls
 NEGATIVE_TAG = ("workshoplive", "negative")   # negative space is marked with this user text
-GHOST_TRANSPARENCY = 0.88           # very ghosted, like the class screen (12% opaque)
+GHOST_TRANSPARENCY = 0.86           # very ghosted, like the class screen (14% opaque)
 CACHE_VERSION = 4                   # versions loaded by an earlier script are loaded again
 
 
@@ -375,6 +376,68 @@ def ghost_material(colour):
     return _materials[key]
 
 
+def void_pieces(mesh):
+    """A mesh's connected pieces (faces sharing a corner position), in the order of their first face,
+    like the class screen, so every void gets the same colour there and here."""
+    top = mesh.TopologyVertices
+    parent = list(range(top.Count))
+
+    def find(a):
+        while parent[a] != a:
+            parent[a] = parent[parent[a]]
+            a = parent[a]
+        return a
+
+    first = []
+    for i in range(mesh.Faces.Count):
+        f = mesh.Faces[i]
+        corners = [top.TopologyVertexIndex(v) for v in ((f.A, f.B, f.C, f.D) if f.IsQuad else (f.A, f.B, f.C))]
+        first.append(corners[0])
+        a = find(corners[0])
+        for c in corners[1:]:
+            b = find(c)
+            if b != a:
+                parent[b] = a
+    order, faces = [], {}
+    for i, corner in enumerate(first):
+        root = find(corner)
+        if root not in faces:
+            faces[root] = []
+            order.append(root)
+        faces[root].append(i)
+    if len(order) <= 1:
+        return [mesh]
+    pieces = []
+    for root in order:
+        keep = set(faces[root])
+        piece = mesh.DuplicateMesh()
+        piece.Faces.DeleteFaces(System.Array[int]([i for i in range(mesh.Faces.Count) if i not in keep]))
+        piece.Compact()
+        piece.Normals.ComputeNormals()
+        pieces.append(piece)
+    return pieces
+
+
+def void_colour(key, k):
+    """The k-th void's colour in a group, worked out exactly like the class screen's voidColor: hues
+    a golden ratio apart from a start picked by the group (in linear RGB, as three.js does), turned
+    round when close to the group's own colour."""
+    to_linear = lambda v: (v / 255.0) / 12.92 if v / 255.0 <= 0.04045 else ((v / 255.0 + 0.055) / 1.055) ** 2.4
+    to_srgb = lambda v: 12.92 * v if v <= 0.0031308 else 1.055 * v ** (1 / 2.4) - 0.055
+    h = 0
+    for ch in str(key):
+        h = (h * 31 + ord(ch)) & 0xFFFFFFFF
+    hue = ((h % 997) / 997.0 + k * 0.6180339887) % 1
+    own = group_colour(key)
+    own_hue = colorsys.rgb_to_hls(to_linear(own.R), to_linear(own.G), to_linear(own.B))[0]
+    apart = abs(hue - own_hue)
+    if min(apart, 1 - apart) < 0.09:
+        hue = (hue + 0.5) % 1
+    r, g, b = colorsys.hls_to_rgb(hue, 0.5, 0.75)
+    byte = lambda v: max(0, min(255, int(round(to_srgb(v) * 255))))
+    return System.Drawing.Color.FromArgb(byte(r), byte(g), byte(b))
+
+
 def pale(colour, t=0.5):
     """The colour, `t` of the way to white."""
     mix = lambda v: int(round(v + (255 - v) * t))
@@ -565,21 +628,28 @@ for i, key in enumerate(keys):
             bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
         elif edge_lines is not None:
             draw.append((None, None, edge_lines, edge_colour(colour)))
-    if negative_on and block.get("ghosts"):
-        if "ghost_edges" not in block:
-            block["ghost_edges"] = [crease_lines(mesh) for mesh, published in block["ghosts"]]
-        for (mesh, published), edge_lines in zip(block["ghosts"], block["ghost_edges"]):
-            colour = fallback
-            if mode == "model" and published is not None and not is_black(published):
-                colour = published
-            tint = pale(colour)
-            ghost_draw.append((mesh, ghost_material(tint), edge_lines if edge_lines.Length else None,
-                               pale(edge_colour(tint), 0.6)))
-            box = mesh.GetBoundingBox(False)
+    if negative_on and block.get("ghosts") and "voids" not in block:
+        # every separate void (each connected piece, also several in one object) in its own colour,
+        # worked out once per version: (piece, colour, edge lines, box)
+        voids = []
+        for mesh, published in block["ghosts"]:
+            for piece in void_pieces(mesh):
+                voids.append((piece, void_colour(key, len(voids)), crease_lines(piece), piece.GetBoundingBox(False)))
+        block["voids"] = voids
+    if negative_on:
+        for piece, colour, edge_lines, box in block.get("voids") or []:
+            ink = System.Drawing.Color.FromArgb(int(colour.R * 0.6), int(colour.G * 0.6), int(colour.B * 0.6))
+            ghost_draw.append((piece, ghost_material(colour), edge_lines if edge_lines.Length else None, pale(ink, 0.5)))
             bbox = box if bbox is None else rg.BoundingBox.Union(bbox, box)
-    if negative_on:   # the names of the negative space: pale tags in its tint, like on the class screen
+        # the names of the negative space: pale tags in the tint of their void (the smallest one
+        # holding the dot, else the nearest), like on the class screen
         for point, text, published in block.get("ghost_dots") or []:
-            back = pale(published if mode == "model" and published is not None and not is_black(published) else fallback)
+            best, best_score = None, None
+            for piece, colour, edge_lines, box in block.get("voids") or []:
+                score = (0, box.Volume) if box.Contains(point) else (1, box.ClosestPoint(point).DistanceTo(point))
+                if best_score is None or score < best_score:
+                    best, best_score = colour, score
+            back = pale(best, 0.55) if best is not None else pale(fallback)
             dots.append((point, text, back, text_on(back)))
     block_dots = block.get("dots") or []      # versions loaded by an earlier script have none
     if dots_on:

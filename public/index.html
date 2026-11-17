@@ -700,17 +700,27 @@ async function buildGroup(id, url) {
   const ghostDots = [];   // the names of the negative space: dots shown with it (N)
   let firstColor;
 
-  function addGhost(rmesh, modelColor) {
-    const g = jsonLoader.parse(rmesh.toThreejsJSON());
-    if (!g.attributes.normal) g.computeVertexNormals();
-    const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color: ghostColor(id, modelColor), transparent: true,
-      opacity: GHOST_OPACITY, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: cutPlanes }));
-    mesh.userData.modelColor = modelColor;
-    mesh.renderOrder = 5;     // after the cubes, so they show through it
-    ghost.add(mesh);
-    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 28), ghostEdgeMat);
-    edges.renderOrder = 5;
-    ghost.add(edges);
+  // Every separate void (each connected piece of the negative space, also when one object holds
+  // several) gets its own colour, with edges in a darker shade of it.
+  const voids = [];   // { box, color } per void, in the file's units: the names' dots take its tint
+  function addGhost(rmesh) {
+    const whole = jsonLoader.parse(rmesh.toThreejsJSON());
+    if (!whole.attributes.normal) whole.computeVertexNormals();
+    const pieces = splitPieces(whole);
+    if (pieces.length > 1) whole.dispose();
+    for (const g of pieces) {
+      const color = voidColor(id, voids.length);
+      g.computeBoundingBox();
+      voids.push({ box: g.boundingBox.clone(), color });
+      const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color, transparent: true,
+        opacity: GHOST_OPACITY, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: cutPlanes }));
+      mesh.renderOrder = 5;     // after the cubes, so they show through it
+      ghost.add(mesh);
+      const edges = new THREE.LineSegments(new THREE.EdgesGeometry(g, 28), new THREE.LineBasicMaterial({
+        color: color.clone().multiplyScalar(0.6), transparent: true, opacity: 0.45, depthWrite: false, clippingPlanes: cutPlanes }));
+      edges.renderOrder = 5;
+      ghost.add(edges);
+    }
   }
 
   function addMesh(rmesh, modelColor) {
@@ -780,6 +790,17 @@ async function buildGroup(id, url) {
   group.scale.setScalar(scale);
   group.updateMatrixWorld(true);
   ghost.scale.setScalar(scale);
+  // A name's dot takes a pale tint of its void: the smallest one whose box holds the dot, else the nearest.
+  for (const d of ghostDots) {
+    const p = new THREE.Vector3(...d.p);
+    let best = null, bestScore = Infinity;
+    for (const v of voids) {
+      const size = v.box.getSize(new THREE.Vector3());
+      const score = v.box.containsPoint(p) ? size.x * size.y * size.z : 1e30 + v.box.distanceToPoint(p);
+      if (score < bestScore) { best = v; bestScore = score; }
+    }
+    if (best) d.tint = `#${best.color.clone().lerp(new THREE.Color('#ffffff'), 0.55).getHexString()}`;
+  }
   return { raw: group, modelColor: firstColor ?? null, dots, ghostDots, ghost: ghost.children.length || ghostDots.length ? ghost : null };
 }
 
@@ -818,7 +839,7 @@ function disposeModel(url) {
       m.ghost.traverse((o) => {
         if (o.isSprite) { o.material.map?.dispose(); o.material.dispose(); dotSprites.delete(o); return; }   // shares three's quad
         o.geometry?.dispose();
-        if (o.material && o.material !== ghostEdgeMat) o.material.dispose();
+        o.material?.dispose();
       });
     }
     m.raw.traverse((o) => {
@@ -833,18 +854,13 @@ function paint(id, raw, ghost) {
     if (o.isMesh) o.material.color.copy(surfaceColor(id, o.userData.modelColor));
     else if (o.userData.dot) drawDot(o);
   });
-  ghost?.traverse((o) => {
-    if (o.isMesh) o.material.color.set(ghostColor(id, o.userData.modelColor));
-    else if (o.userData.dot) drawDot(o);
-  });
+  ghost?.traverse((o) => { if (o.userData.dot) drawDot(o); });   // the voids keep their own colours
 }
 
 // ---------- negative space (N): the objects that cut each cube's voids, published with the cube
 // (the NegativeSpace option), tagged with user text. Very ghosted, never part of the cube: they hang in
 // their own group next to it, so the volume, voids, interfaces, sections and clicks ignore them.
-const GHOST_OPACITY = 0.12;
-const ghostEdgeMat = new THREE.LineBasicMaterial({ color: '#1e232a', transparent: true, opacity: 0.2, depthWrite: false,
-  clippingPlanes: cutPlanes });
+const GHOST_OPACITY = 0.14;
 const ghostGroups = new Set();
 let negativeOn = params.get('negative') === '1';
 // Only the workshoplive=negative user text counts, never the layer: files from the first version
@@ -852,7 +868,61 @@ let negativeOn = params.get('negative') === '1';
 function isNegative(doc, attrs) {
   try { return attrs.getUserString('workshoplive') === 'negative'; } catch { return false; }
 }
-// The cube's colour, halfway to white: a pale tint of it.
+// A colour for each void: hues a golden ratio apart from a start picked by the group, so they look
+// random, stay clearly apart, and come out the same on every screen and every reload. Hues close to
+// the group's own colour are turned round, so a void never disappears against its cube.
+function voidColor(id, k) {
+  let h = 0;
+  for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0;
+  let hue = ((h % 997) / 997 + k * 0.6180339887) % 1;
+  const own = new THREE.Color(groupColor(id)).getHSL({}).h;
+  const apart = Math.abs(hue - own);
+  if (Math.min(apart, 1 - apart) < 0.09) hue = (hue + 0.5) % 1;
+  return new THREE.Color().setHSL(hue, 0.75, 0.5);
+}
+// A geometry's connected pieces (faces sharing a corner position, welded or not), one geometry each.
+function splitPieces(g) {
+  const pos = g.attributes.position, nor = g.attributes.normal, idx = g.index ? g.index.array : null;
+  const tris = (idx ? idx.length : pos.count) / 3;
+  const vert = (t, c) => (idx ? idx[t * 3 + c] : t * 3 + c);
+  g.computeBoundingBox();
+  const eps = Math.max(g.boundingBox.getSize(new THREE.Vector3()).length() * 1e-7, 1e-12);
+  const weld = new Map(), at = new Int32Array(pos.count);
+  for (let i = 0; i < pos.count; i++) {
+    const key = `${Math.round(pos.getX(i) / eps)},${Math.round(pos.getY(i) / eps)},${Math.round(pos.getZ(i) / eps)}`;
+    let w = weld.get(key);
+    if (w === undefined) { w = weld.size; weld.set(key, w); }
+    at[i] = w;
+  }
+  const parent = Int32Array.from({ length: weld.size }, (_, i) => i);
+  const find = (a) => { while (parent[a] !== a) a = parent[a] = parent[parent[a]]; return a; };
+  for (let t = 0; t < tris; t++) {
+    const a = find(at[vert(t, 0)]);
+    for (let c = 1; c < 3; c++) { const b = find(at[vert(t, c)]); if (b !== a) parent[b] = a; }
+  }
+  const groups = new Map();
+  for (let t = 0; t < tris; t++) {
+    const r = find(at[vert(t, 0)]);
+    if (!groups.has(r)) groups.set(r, []);
+    groups.get(r).push(t);
+  }
+  if (groups.size <= 1) return [g];
+  return [...groups.values()].map((list) => {
+    const p = new Float32Array(list.length * 9), n = nor ? new Float32Array(list.length * 9) : null;
+    list.forEach((t, j) => {
+      for (let c = 0; c < 3; c++) {
+        const v = vert(t, c), o = (j * 3 + c) * 3;
+        p[o] = pos.getX(v); p[o + 1] = pos.getY(v); p[o + 2] = pos.getZ(v);
+        if (n) { n[o] = nor.getX(v); n[o + 1] = nor.getY(v); n[o + 2] = nor.getZ(v); }
+      }
+    });
+    const piece = new THREE.BufferGeometry();
+    piece.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    if (n) piece.setAttribute('normal', new THREE.BufferAttribute(n, 3)); else piece.computeVertexNormals();
+    return piece;
+  });
+}
+// The cube's colour, halfway to white: a pale tint of it (a name's dot when no void is found for it).
 function ghostColor(id, modelColor) {
   return new THREE.Color(colorFor(id, modelColor)).lerp(new THREE.Color('#ffffff'), 0.5);
 }
@@ -885,7 +955,7 @@ function drawDot(sprite) {
   canvas.width = w * r; canvas.height = h * r;   // resets the context
   ctx.scale(r, r);
   // dark tags; the names of the negative space pale, in its ghost tint
-  const bg = sprite.userData.dot.ghost ? `#${ghostColor(sprite.userData.dot.id, color).getHexString()}`
+  const bg = sprite.userData.dot.ghost ? sprite.userData.dot.tint || `#${ghostColor(sprite.userData.dot.id, color).getHexString()}`
     : mode === 'model' && color ? color : DOT_INK;
   ctx.fillStyle = bg;
   ctx.beginPath();

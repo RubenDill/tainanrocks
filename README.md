@@ -96,7 +96,7 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 
 **Text dots** that a group published with its cube (the **TextDots** option) float on it like Rhino's own dots: dark tags (in the dot's own colour with model colours), always on top and the same size on screen in every view. They move with the cube, are cut away by a section, and **L** hides them together with the group labels.
 
-**Negative space** (N, in the Display menu) shows the objects a group published as its negative space (the **NegativeSpace** option): the shapes that cut the cube's voids, very ghosted in a pale tint of the group colour with faint edges, where they were in Rhino. Objects that had a name in Rhino show it as a pale text dot in their centre; these come and go with the negative space, not with the labels (L). They're never part of the cube: size, volume, voids, interfaces, sections, the grid and clicking only count the cube itself. Off when the page opens (`?negative=1` starts with it on).
+**Negative space** (N, in the Display menu) shows the objects a group published as its negative space (the **NegativeSpace** option): the shapes that cut the cube's voids, very ghosted, where they were in Rhino. Every separate void (each connected piece, also when one object holds several) has its own colour, with edges in a darker shade of it; the colours look random but are the same on every screen and every reload, and steer clear of the group's own colour. Objects that had a name in Rhino show it as a text dot in their centre, in a pale tint of their void's colour; these come and go with the negative space, not with the labels (L). They're never part of the cube: size, volume, voids, interfaces, sections, the grid and clicking only count the cube itself. Off when the page opens (`?negative=1` starts with it on).
 
 Clicking a group chip at the bottom left opens that group in One by one with its card. Each chip shows when the group last published; a dot marks the ones published in the last 90 seconds.
 
@@ -166,7 +166,7 @@ Geometry is meshed with the file's render-mesh settings and converted to metres,
    | `edges` | bool | `False` turns the edge lines off (on by default) |
    | `shading` | bool | `False` draws the cubes in flat colour, without light (shaded by default) |
    | `dots` | bool | `False` hides the text dots published with the cubes (shown by default) |
-   | `negative` | bool | `True` shows the published negative space, very ghosted, with the names of its objects (off by default, like on the screen) |
+   | `negative` | bool | `True` shows the published negative space, very ghosted, each void in its own colour (the same as on the screen), with the names of its objects (off by default, like on the screen) |
    | `server` | str | overrides `SERVER_URL` |
 
 3. Outputs: `M` (the meshes, one branch per group: `{1}`, `{2}`, …), `C` (one colour per branch), `G` (the group number of each branch) and `status`.
