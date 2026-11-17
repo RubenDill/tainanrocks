@@ -99,6 +99,16 @@
   .card .row button:hover { background: #e8ebec; }
   .card .row button:disabled { opacity: .6; cursor: progress; }
   .card .empty { margin: 4px 0 0; color: var(--muted); font-size: 14px; }
+  .card h3 { margin: 12px 0 4px; font-size: 14px; font-weight: 750; }
+  .card h3 small { color: var(--muted); font-weight: 500; margin-left: 4px; }
+  .card .voids { max-height: 210px; overflow-y: auto; }
+  .card table { width: 100%; border-collapse: collapse; font-size: 13px; line-height: 1.3; font-variant-numeric: tabular-nums; }
+  .card th { text-align: left; font-weight: 500; color: var(--muted); padding: 0 6px 3px 0; position: sticky; top: 0; background: var(--paper); }
+  .card td { padding: 3px 6px 3px 0; border-top: 1px solid var(--rule); vertical-align: middle; }
+  .card td:last-child, .card th:last-child { text-align: right; padding-right: 0; white-space: nowrap; }
+  .card td .chip { display: block; width: 11px; height: 11px; }
+  .card .muted { color: var(--muted); }
+  .card .note { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
 
   .keys { flex: 1 1 340px; min-width: 0; font-size: 13px; color: var(--muted); text-align: right; line-height: 1.7; pointer-events: auto; }
   .kbar { display: flex; justify-content: flex-end; align-items: center; gap: 6px; margin-top: 3px; }
@@ -711,7 +721,7 @@ async function buildGroup(id, url) {
     for (const g of pieces) {
       const color = voidColor(id, voids.length);
       g.computeBoundingBox();
-      voids.push({ box: g.boundingBox.clone(), color });
+      voids.push({ box: g.boundingBox.clone(), color, volume: signedVolume(g), names: [] });
       const mesh = new THREE.Mesh(g, new THREE.MeshLambertMaterial({ color, transparent: true,
         opacity: GHOST_OPACITY, depthWrite: false, side: THREE.DoubleSide, clippingPlanes: cutPlanes }));
       mesh.renderOrder = 5;     // after the cubes, so they show through it
@@ -799,9 +809,16 @@ async function buildGroup(id, url) {
       const score = v.box.containsPoint(p) ? size.x * size.y * size.z : 1e30 + v.box.distanceToPoint(p);
       if (score < bestScore) { best = v; bestScore = score; }
     }
-    if (best) d.tint = `#${best.color.clone().lerp(new THREE.Color('#ffffff'), 0.55).getHexString()}`;
+    if (best) { d.tint = `#${best.color.clone().lerp(new THREE.Color('#ffffff'), 0.55).getHexString()}`; best.names.push(d.text); }
   }
-  return { raw: group, modelColor: firstColor ?? null, dots, ghostDots, ghost: ghost.children.length || ghostDots.length ? ghost : null };
+  // The voids for the One by one card, in metres: a volume only for closed pieces (within their box).
+  const voidList = voids.map((v, k) => {
+    const size = v.box.getSize(new THREE.Vector3()).multiplyScalar(scale);
+    const volume = Math.abs(v.volume) * scale ** 3;
+    return { name: v.names.join(', '), number: k + 1, color: `#${v.color.getHexString()}`, size,
+      volume: volume > 0 && volume <= size.x * size.y * size.z * 1.02 ? volume : null };
+  });
+  return { raw: group, modelColor: firstColor ?? null, dots, ghostDots, voids: voidList, ghost: ghost.children.length ? ghost : null };
 }
 
 // ---------- versions
@@ -811,18 +828,18 @@ const groupVersions = {};   // id -> [{ url, size, publishedAt }]
 const modelCache = {};      // url -> Promise<{ raw, box, center, size, modelColor }>
 function loadModel(id, url) {
   if (!modelCache[url]) {
-    const p = buildGroup(id, url).then(({ raw, modelColor, dots, ghostDots, ghost }) => {
+    const p = buildGroup(id, url).then(({ raw, modelColor, dots, ghostDots, voids, ghost }) => {
       const box = new THREE.Box3().setFromObject(raw);
       const center = box.isEmpty() ? new THREE.Vector3() : box.getCenter(new THREE.Vector3());
       const size = box.isEmpty() ? new THREE.Vector3() : box.getSize(new THREE.Vector3());
       raw.position.copy(center).negate();   // hang the model around its centre inside the holder
       const cage = box.isEmpty() ? null : makeCage(box, center);   // the grid on its six planes
       for (const d of dots || []) raw.add(makeDot(d));   // after the box, so dots never change its size
-      if (ghost) {
-        ghost.position.copy(raw.position); ghost.visible = negativeOn; ghostGroups.add(ghost);
-        for (const d of ghostDots || []) ghost.add(makeDot(d));
-      }
-      return { raw, box, center, size, modelColor, cage, ghost };
+      // the voids' names hang with the cube's own dots, not in the negative space, so they can show
+      // with the labels while the negative space itself is hidden
+      for (const d of ghostDots || []) raw.add(makeDot(d));
+      if (ghost) { ghost.position.copy(raw.position); ghost.visible = negativeOn; ghostGroups.add(ghost); }
+      return { raw, box, center, size, modelColor, cage, ghost, voids: voids || [] };
     });
     p.catch(() => { if (modelCache[url] === p) delete modelCache[url]; });
     modelCache[url] = p;
@@ -879,6 +896,18 @@ function voidColor(id, k) {
   const apart = Math.abs(hue - own);
   if (Math.min(apart, 1 - apart) < 0.09) hue = (hue + 0.5) % 1;
   return new THREE.Color().setHSL(hue, 0.75, 0.5);
+}
+// Signed volume of a closed geometry, in its own units (summing tetrahedra from the origin).
+function signedVolume(g) {
+  const pos = g.attributes.position, idx = g.index;
+  const n = idx ? idx.count : pos.count, at = (i) => (idx ? idx.getX(i) : i);
+  const a = new THREE.Vector3(), b = new THREE.Vector3(), c = new THREE.Vector3(), x = new THREE.Vector3();
+  let vol = 0;
+  for (let i = 0; i + 2 < n; i += 3) {
+    a.fromBufferAttribute(pos, at(i)); b.fromBufferAttribute(pos, at(i + 1)); c.fromBufferAttribute(pos, at(i + 2));
+    vol += a.dot(x.crossVectors(b, c)) / 6;
+  }
+  return vol;
 }
 // A geometry's connected pieces (faces sharing a corner position, welded or not), one geometry each.
 function splitPieces(g) {
@@ -987,7 +1016,7 @@ function sizeDots() {
   if (!dotSprites.size) return;
   const k = 2 * Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) / (renderer.domElement.clientHeight || innerHeight);
   for (const sprite of dotSprites) {
-    sprite.visible = labelsShown || !!sprite.userData.dot.ghost;   // negative space's names go with it (N), not with L
+    sprite.visible = labelsShown || (!!sprite.userData.dot.ghost && negativeOn);   // the voids' names: with L, or with N
     if (!sprite.parent || !sprite.visible) continue;
     const parent = Math.max(1e-9, sprite.parent.getWorldScale(dotScaleTmp).x);
     sprite.scale.set(sprite.userData.px[0] * k / parent, sprite.userData.px[1] * k / parent, 1);
@@ -1017,7 +1046,7 @@ function showModel(id, m, idx) {
   }
   const v = groupVersions[id][idx];
   Object.assign(b, { url: v.url, publishedAt: v.publishedAt, version: idx, versionCount: groupVersions[id].length,
-    raw: m.raw, cage: m.cage, ghost: m.ghost, box: m.box, center: m.center, size: m.size, modelColor: m.modelColor });
+    raw: m.raw, cage: m.cage, ghost: m.ghost, voids: m.voids, box: m.box, center: m.center, size: m.size, modelColor: m.modelColor });
 }
 function hideBlock(id) {
   const b = blocks[id];
@@ -3102,6 +3131,21 @@ const fmtNum = (n, d = 2) => n.toLocaleString([], { minimumFractionDigits: d, ma
 const fmtBytes = (n) => (n >= 1048576 ? `${fmtNum(n / 1048576, 1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`);
 const esc = (t) => String(t).replace(/[&<>"]/g, (ch) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[ch]));
 
+// One by one: every void of the group (its negative space, each connected piece), in its colour.
+const fmtSize = (v) => {
+  const big = Math.max(v.x, v.y, v.z) >= 1, k = big ? 1 : 100, d = big ? 2 : 1;
+  return `${[v.x, v.y, v.z].map((x) => fmtNum(x * k, d)).join(' × ')} ${big ? 'm' : 'cm'}`;
+};
+function voidTable(voids) {
+  const rows = voids.map((v) => `<tr><td><span class="chip" style="--c:${esc(v.color)}"></span></td>
+    <td>${v.name ? esc(v.name) : `<span class="muted">Void ${v.number}</span>`}</td>
+    <td>${fmtSize(v.size)}</td>
+    <td>${v.volume === null ? '<span class="muted">–</span>' : `${fmtNum(v.volume * 1000, 1)} L`}</td></tr>`).join('');
+  return `<h3>Voids <small>${voids.length}</small></h3>
+    <div class="voids"><table><thead><tr><th></th><th>Name</th><th>Size</th><th>Volume</th></tr></thead><tbody>${rows}</tbody></table></div>
+    <p class="note">The objects that cut the voids, as published (Negative space, N). Volume only for closed shapes.</p>`;
+}
+
 function showCard(key) { cardFor = key; renderCard(); }
 function hideCard() { cardFor = null; renderCard(); }
 function renderCard() {
@@ -3141,7 +3185,7 @@ function renderCard() {
       <dt>Surface</dt><dd>${fmtNum(st.area)} m²</dd>
       <dt>Touching</dt><dd>${near.length ? `${near.length} ${near.length === 1 ? 'cube' : 'cubes'} <small>(group ${esc(names)})</small>, ${fmtNum(touching)} m²` : '<small>no other cube</small>'}</dd>
       <dt>Model</dt><dd>${fmtNum(st.tris, 0)} triangles${v && v.size ? ` <small>· ${fmtBytes(v.size)} file</small>` : ''}</dd>
-    </dl>`;
+    </dl>${pinned && b.voids?.length ? voidTable(b.voids) : ''}`;
   }
   const sub = !b ? '' : `${b.versionCount > 1 ? `Version ${b.version + 1} of ${b.versionCount} · ` : ''}published ${historyAt === null ? timeAgo(b.publishedAt) : 'at ' + clock(b.publishedAt)}`;
   cardEl.innerHTML = `<header><span class="chip" style="--c:${esc(color)}"></span><h2>${esc(slot.name)}</h2>
