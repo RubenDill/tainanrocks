@@ -652,10 +652,10 @@ function colorFor(id, modelColor) {
   if (mode === 'model' && modelColor) return modelColor;
   return groupColor(id);
 }
-// What the model's surfaces get: the colour above, or with Rock on, stone tinted with it.
+// What the model's surfaces get: the colour above, or with Rock on plain stone, the same for every
+// group and every colour mode (the rock texture never shows group colours).
 function surfaceColor(id, modelColor) {
-  const c = new THREE.Color(colorFor(id, modelColor));
-  return rockOn ? c.lerp(STONE, mode === 'white' ? 0.85 : 0.55) : c;
+  return rockOn ? STONE.clone() : new THREE.Color(colorFor(id, modelColor));
 }
 // Colour of a group's chip and label: its model's colour, or the group colour.
 function chipColor(slot) {
