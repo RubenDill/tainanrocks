@@ -7,7 +7,7 @@ Each group designs one piece (a cube) in Rhino and presses **Publish**. The clas
 - **Combined**: all pieces together at their real Rhino coordinates (e.g. eight cubes forming one 2×2×2 cube); the **Separation** slider pushes every piece away from the centre, with its label on top once they're apart
 - **Interfaces**: a group's cube with the cubes it touches, pulled apart, with each shared face drawn in the gap; click a face to see in 2D where the cubes touch and where their voids connect, with the areas
 
-Every publish is kept, so the **timeline** can step back through the session, version by version, or replay it. **Sun** (S) lights the model with the real sun for any date and time in Tainan, with long shadows, the sun's path and a compass. **Animals** (A) brings the structure to life with chibi Taiwanese wildlife; **Wildlife** (W) fills the voids with the real residents of Tainan's stone: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel.
+Every publish is kept, so the **timeline** can step back through the session, version by version, or replay it. **Sun** (S) lights the model with the real sun for any date and time in Tainan, with long shadows, the sun's path and a compass; **Sun exposure** (E) colours every surface by how much direct sun it gets over a day or a year. **Animals** (A) brings the structure to life with chibi Taiwanese wildlife; **Wildlife** (W) fills the voids with the real residents of Tainan's stone: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel.
 
 ```
 Rhino (each group)                 Vercel                          Class screen (browser)
@@ -77,6 +77,7 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 | **←** **→** | Previous / next group (opens One by one) |
 | **[** **]** | Previous / next update on the timeline |
 | **S** | Sun on/off |
+| **E** | Sun exposure heatmap on/off |
 | **A** | Animals on/off |
 | **W** | Wildlife on/off |
 | **R** | Slow orbit on/off (dragging pauses it for 20 s; the matrix never orbits) |
@@ -112,6 +113,8 @@ The address keeps the current view, so you can bookmark one: `…/#matrix`, `…
 **Timeline.** The bar above the group chips has a row for every group and a dot, in the group's colour, for every publish. **Day** shows one day at a time (‹ › next to the date move between days that have updates); **All time** shows the whole session. Click or drag on the chart to go back to that moment: the red line marks it, later updates fade, and a ring marks the version each group is showing. Or use ‹ › or **[** **]**, or press ▶ to replay one update per second (in Day, that day's updates). Everything follows the point in time you pick, the interface drawings included; the status line says you're looking back. **● Live** returns to the newest version of every group. It starts hidden: **H** (or the Timeline button) opens it and × hides it again; the browser remembers which. The server keeps the last 100 versions per group.
 
 **Sun.** Date and time sliders set the sun for Tainan (latitude 22.99°, longitude 120.21°, UTC+8); ▶ plays the day from 5:00 to 19:30. The model's +Y is taken as north. The orange arc is the sun's path that day, the grey ring the horizon.
+
+**Sun exposure.** A heatmap of the direct sunlight every surface receives, with the shadows the cubes cast on each other and into their own voids. **Day** sums the selected date (the same date as Sun) from sunrise to sunset in 64 steps; **Year** gives the average day over the year (9 moments on each of 7 dates, the solstices and the months between). **Sun hours** counts the time in direct sun; **Energy** adds up the direct beam in kWh/m², through a clear sky (Meinel's air-mass model) and by the angle it strikes the surface at. The colour runs from pale (no direct sun) to deep orange (the most possible: sun all day, or the best-facing surface), with the scale in the panel. Diffuse sky light and clouds aren't counted. It follows the view: in Combined the cubes shade each other, in One by one a cube stands alone. The shading is done on the graphics card from a depth map of the cubes seen from every sun position, redrawn when the cubes move or the date changes. `?exposure=1` starts with it on (`&period=year`, `&measure=energy`).
 
 **Animals.** Eight little residents: Formosan black bears, leopard cats (石虎), a Formosan rock macaque, a pangolin and Taiwan blue magpies. They find places to stand on the cubes (tops, and cave floors with enough headroom), hop between them, fly and perch (the magpies), turn round to look at you, and now and then say something. They ride along when the cubes move between views and move house when a cube is covered, hidden or replaced by a new version. Click one and it jumps and tells you its name. `?animals=1` starts with them on.
 

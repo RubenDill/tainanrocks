@@ -252,6 +252,21 @@
   .sunpanel small { grid-column: 1 / -1; color: var(--muted); }
   .label.compass span { background: none; box-shadow: none; color: var(--ink); padding: 0; font-size: 14px; }
 
+  /* sun exposure: period / measure switches, and the legend */
+  .expopanel { display: grid; grid-template-columns: auto auto minmax(110px, 190px) 7ch; gap: 8px 10px; align-items: center; }
+  .expopanel .seg { display: inline-flex; padding: 2px; gap: 2px; border: 1px solid var(--rule); border-radius: 6px; background: #fff; }
+  .expopanel .seg button { border: 0; background: none; padding: 4px 9px; border-radius: 4px; cursor: pointer; font: inherit; font-weight: 650; color: var(--ink); }
+  .expopanel .seg button:hover { background: #e8ebec; }
+  .expopanel .seg button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+  .expopanel .legend { grid-column: 1 / -1; }
+  .expopanel .legend b { display: block; font-weight: 650; margin-bottom: 4px; }
+  .expopanel .ramp { height: 12px; border-radius: 3px; border: 1px solid var(--rule);
+    background: linear-gradient(90deg, #fbf0e8, #f6c7a6 25%, #ee9561 50%, #d65f2a 75%, #8e3412); }
+  .expopanel .ticks { display: flex; justify-content: space-between; margin-top: 3px; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .expopanel small { grid-column: 1 / -1; color: var(--muted); max-width: 46ch; line-height: 1.35; }
+  .expopanel [hidden] { display: none !important; }
+  .expopanel input[type=range] { width: 100%; min-width: 0; }
+
   /* animals' speech bubbles */
   .emote { opacity: 0; transition: opacity .25s; pointer-events: none; }
   .emote.show { opacity: 1; }
@@ -392,6 +407,22 @@
       <output id="sun-time-out" for="sun-time"></output>
       <small id="sun-info"></small>
     </div>
+    <div class="context expopanel" id="ctx-exposure" hidden>
+      <div class="seg" role="group" aria-label="Period">
+        <button type="button" data-period="day">Day</button><button type="button" data-period="year">Year</button>
+      </div>
+      <div class="seg" role="group" aria-label="Measure">
+        <button type="button" data-measure="hours">Sun hours</button><button type="button" data-measure="energy">Energy</button>
+      </div>
+      <input id="expo-day" type="range" min="1" max="365" step="1" aria-label="Date">
+      <output id="expo-day-out" for="expo-day"></output>
+      <div class="legend">
+        <b id="expo-title"></b>
+        <div class="ramp" aria-hidden="true"></div>
+        <div class="ticks" id="expo-ticks"></div>
+      </div>
+      <small id="expo-info"></small>
+    </div>
   </div>
 </div>
 
@@ -449,6 +480,7 @@
         <button class="dd-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-env">Environment <span aria-hidden="true">▾</span></button>
         <div class="menu" id="menu-env" role="group" aria-label="Environment" hidden>
           <button id="btn-sun" aria-pressed="false" title="Sunlight for a date and time (S)"><kbd>S</kbd> Sun</button>
+          <button id="btn-exposure" aria-pressed="false" title="Heatmap of the direct sunlight every surface gets over a day or a year, with the shadows of all the cubes (E)"><kbd>E</kbd> Sun exposure</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
           <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
         </div>
@@ -750,6 +782,7 @@ async function buildGroup(id, url) {
     mesh.castShadow = mesh.receiveShadow = true;
     mesh.userData.modelColor = modelColor;
     mesh.userData.blockId = id;
+    mesh.layers.enable(EXPO_LAYER);   // casts shadows in the sun-exposure maps
     group.add(mesh);
     group.add(new THREE.LineSegments(new THREE.EdgesGeometry(g, 28), edgeMat));
     if (firstColor === undefined) firstColor = modelColor;
@@ -1611,6 +1644,7 @@ addEventListener('keydown', (e) => {
   else if (k === 's') setSun(!sunOn);
   else if (k === 'a') setAnimals(!animalsOn);
   else if (k === 'w') setWild(!wildOn);
+  else if (k === 'e') setExposure(!expoOn);
   else if (k === 't') setRock(!rockOn);
   else if (k === 'x') setSection(!sectionOn);
   else if (k === 'g') setGrid(!gridOn);
@@ -1996,6 +2030,233 @@ sunPlayBtn.onclick = () => {
   if (sunPlaying && (sunMinutes < SUN_PLAY[0] || sunMinutes >= SUN_PLAY[1])) sunMinutes = SUN_PLAY[0];
   renderSunPanel();
 };
+
+// ---------- sun exposure (E): how much direct sunlight every surface gets, as a heatmap
+// The sun's positions over a day (64 moments from sunrise to sunset) or a year (9 moments on each
+// of 7 dates: the solstices and the months between, which stand in for both halves of the year)
+// are each turned into a depth map of the cubes, seen from the sun, in one big texture. The cubes'
+// shader then asks every map whether its point sees the sun, and adds up the time (Sun hours) or the
+// direct beam energy, by the angle the sun strikes it at, through a clear sky (Energy). So the
+// cubes shade each other and themselves: deep voids stay pale, tops and south faces burn. The maps
+// are made again when the cubes move to a new place, or the date or period changes.
+const EXPO_LAYER = 3;
+const EXPO_TILES = 8, EXPO_MAX = EXPO_TILES * EXPO_TILES;
+const EXPO_SIZE = Math.min(4096, renderer.capabilities.maxTextureSize);
+const EXPO_RAMP = ['#fbf0e8', '#f6c7a6', '#ee9561', '#d65f2a', '#8e3412'];   // one hue, light (little sun) to dark (a lot)
+const expoUniforms = {
+  expoOn: { value: 0 },
+  expoMap: { value: new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1) },
+  expoSun: { value: Array.from({ length: EXPO_MAX }, () => new THREE.Vector4()) },
+  expoCount: { value: 0 },
+  expoCos: { value: 0 },
+  expoMax: { value: 1 },
+  expoC: { value: new THREE.Vector3() },
+  expoR: { value: 1 },
+  expoTexel: { value: 0.01 },
+  expoRamp: { value: EXPO_RAMP.map((c) => new THREE.Vector3(...[1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255))) },   // sRGB, as written out
+};
+expoUniforms.expoMap.value.needsUpdate = true;
+const EXPO_GLSL = `
+  uniform float expoOn;
+  uniform sampler2D expoMap;
+  uniform vec4 expoSun[${EXPO_MAX}];   // xyz: towards the sun, w: what that moment is worth
+  uniform int expoCount;
+  uniform float expoCos;                // 1: weigh by the angle of incidence (energy); 0: count time
+  uniform float expoMax;
+  uniform vec3 expoC;
+  uniform float expoR;
+  uniform float expoTexel;
+  uniform vec3 expoRamp[5];
+  varying vec3 vExpoW;
+  varying vec3 vExpoN;
+  vec3 expoColor() {
+    vec3 n = normalize(vExpoN);
+    vec3 p = vExpoW + n * expoTexel * 1.5;   // a step off the surface, so it doesn't shade itself
+    float sum = 0.0;
+    for (int i = 0; i < ${EXPO_MAX}; i++) {
+      if (i >= expoCount) break;
+      vec3 s = expoSun[i].xyz;
+      float ndl = dot(n, s);
+      if (ndl <= 0.0) continue;
+      // the same orthographic view of the cubes from the sun as the map was drawn with
+      vec3 up = abs(s.z) < 0.999 ? vec3(0.0, 0.0, 1.0) : vec3(0.0, 1.0, 0.0);
+      vec3 rx = normalize(cross(up, s)), ry = cross(s, rx);
+      vec3 q = p - expoC;
+      vec2 uv = 0.5 + 0.5 * vec2(dot(q, rx), dot(q, ry)) / expoR;
+      float depth = (2.0 * expoR - dot(q, s) - 0.5 * expoR) / (3.0 * expoR);
+      vec2 tile = vec2(mod(float(i), ${EXPO_TILES.toFixed(1)}), floor(float(i) / ${EXPO_TILES.toFixed(1)}));
+      float stored = unpackRGBAToDepth(texture2D(expoMap, (tile + clamp(uv, 0.001, 0.999)) / ${EXPO_TILES.toFixed(1)}));
+      if (depth - expoTexel / (3.0 * expoR) > stored) continue;   // something stands between it and the sun
+      sum += expoSun[i].w * mix(1.0, ndl, expoCos);
+    }
+    float e = clamp(sum / expoMax, 0.0, 1.0) * 4.0;
+    int k = int(min(floor(e), 3.0));
+    vec3 a = expoRamp[0], b = expoRamp[1];
+    if (k == 1) { a = expoRamp[1]; b = expoRamp[2]; } else if (k == 2) { a = expoRamp[2]; b = expoRamp[3]; } else if (k == 3) { a = expoRamp[3]; b = expoRamp[4]; }
+    vec3 col = mix(a, b, e - float(k));
+    // a little fixed shading, so the form still reads
+    return col * (0.92 + 0.08 * dot(n, normalize(vec3(-0.35, -0.5, 0.8))));
+  }`;
+
+const ctxExposure = document.getElementById('ctx-exposure');
+const btnExposure = document.getElementById('btn-exposure');
+const expoDayEl = document.getElementById('expo-day');
+let expoOn = params.get('exposure') === '1';
+let expoPeriod = params.get('period') === 'year' ? 'year' : 'day';
+let expoMeasure = params.get('measure') === 'energy' ? 'energy' : 'hours';
+let expoRT = null, expoKey = '', expoAt = 0, expoSamples = [];
+const expoCam = new THREE.OrthographicCamera();
+expoCam.layers.set(EXPO_LAYER);
+const expoDepthMat = new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, side: THREE.DoubleSide });
+
+// Clear-sky direct beam on a surface facing the sun, W/m² (Meinel's air-mass model).
+function beam(alt) {
+  const deg = THREE.MathUtils.radToDeg(alt);
+  const am = 1 / (Math.sin(alt) + 0.50572 * Math.pow(deg + 6.07995, -1.6364));
+  return 1353 * Math.pow(0.7, Math.pow(am, 0.678));
+}
+function daylight(day) {
+  let rise = null, set = null;
+  for (let m = 0; m <= 1440; m += 2) if (solarPosition(day, m).alt > 0) { if (rise === null) rise = m; set = m; }
+  return rise === null ? null : [rise, set];
+}
+const EXPO_YEAR = [[172, 1], [141, 2], [110, 2], [79, 2], [51, 2], [21, 2], [355, 1]];   // [day of year, months it stands for]
+function makeSamples() {
+  const days = expoPeriod === 'day' ? [[sunDay, 12]] : EXPO_YEAR;
+  const per = expoPeriod === 'day' ? EXPO_MAX : 9;
+  const out = [];
+  for (const [day, months] of days) {
+    const dl = daylight(day);
+    if (!dl) continue;
+    const step = (dl[1] - dl[0]) / per;
+    for (let k = 0; k < per; k++) {
+      const p = solarPosition(day, dl[0] + (k + 0.5) * step);
+      if (p.alt <= 0) continue;
+      const hours = (step / 60) * (months / 12);
+      out.push({ dir: skyVector(p.alt, p.az).normalize(), hours, kwh: hours * beam(p.alt) / 1000 });
+    }
+  }
+  return out;
+}
+// The most a surface could get with nothing in the way: all the daylight (hours), or the best-facing
+// plane (energy). The top of the legend.
+function expoFull(samples) {
+  if (expoMeasure === 'hours') return samples.reduce((a, s) => a + s.hours, 0);
+  let best = 0;
+  const n = new THREE.Vector3();
+  for (let i = 0; i < 600; i++) {   // directions spread over the sky (a Fibonacci sphere, upper half)
+    const z = 1 - (i + 0.5) / 600, r = Math.sqrt(1 - z * z), a = i * 2.39996;
+    n.set(r * Math.cos(a), r * Math.sin(a), z);
+    best = Math.max(best, samples.reduce((acc, s) => acc + s.kwh * Math.max(0, n.dot(s.dir)), 0));
+  }
+  return best;
+}
+function shownBounds() {
+  const box = new THREE.Box3();
+  for (const b of Object.values(blocks)) {
+    if (!b.holder.visible || !b.box || b.box.isEmpty()) continue;
+    b.holder.updateMatrixWorld();
+    box.union(b.box.clone().translate(b.center.clone().negate()).applyMatrix4(b.holder.matrixWorld));
+  }
+  return box;
+}
+function renderExposureMaps() {
+  const bounds = shownBounds();
+  if (bounds.isEmpty()) return;
+  const c = bounds.getCenter(new THREE.Vector3()), R = bounds.getSize(new THREE.Vector3()).length() / 2 * 1.02 + 1e-4;
+  const T = EXPO_SIZE / EXPO_TILES;
+  if (!expoRT) expoRT = new THREE.WebGLRenderTarget(EXPO_SIZE, EXPO_SIZE, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
+  const keep = { rt: renderer.getRenderTarget(), auto: renderer.shadowMap.autoUpdate, clear: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha(), over: scene.overrideMaterial, bg: scene.background, autoClear: renderer.autoClear };
+  renderer.shadowMap.autoUpdate = false;
+  scene.overrideMaterial = expoDepthMat;
+  scene.background = null;
+  renderer.autoClear = true;
+  renderer.setClearColor(0xffffff, 1);
+  expoRT.scissorTest = true;
+  expoCam.left = -R; expoCam.right = R; expoCam.top = R; expoCam.bottom = -R;
+  expoCam.near = 0.5 * R; expoCam.far = 3.5 * R;   // the camera stands 2R out: the shader's depth matches this
+  expoCam.updateProjectionMatrix();
+  expoSamples.forEach((s, i) => {
+    const col = i % EXPO_TILES, row = Math.floor(i / EXPO_TILES);
+    expoRT.viewport.set(col * T, row * T, T, T);
+    expoRT.scissor.set(col * T, row * T, T, T);
+    renderer.setRenderTarget(expoRT);
+    expoCam.up.set(...(Math.abs(s.dir.z) < 0.999 ? [0, 0, 1] : [0, 1, 0]));
+    expoCam.position.copy(c).addScaledVector(s.dir, 2 * R);
+    expoCam.lookAt(c);
+    expoCam.updateMatrixWorld();
+    renderer.render(scene, expoCam);
+  });
+  renderer.setRenderTarget(keep.rt);
+  renderer.setClearColor(keep.clear, keep.alpha);
+  renderer.autoClear = keep.autoClear;
+  scene.overrideMaterial = keep.over;
+  scene.background = keep.bg;
+  renderer.shadowMap.autoUpdate = keep.auto;
+  renderer.shadowMap.needsUpdate = true;
+  expoUniforms.expoC.value.copy(c);
+  expoUniforms.expoR.value = R;
+  expoUniforms.expoTexel.value = (2 * R) / T;
+  expoUniforms.expoMap.value = expoRT.texture;
+}
+// What each moment is worth, for the measure shown, and the legend.
+function applyExposureWeights() {
+  expoSamples.forEach((s, i) => expoUniforms.expoSun.value[i].set(s.dir.x, s.dir.y, s.dir.z, expoMeasure === 'hours' ? s.hours : s.kwh));
+  expoUniforms.expoCount.value = expoSamples.length;
+  expoUniforms.expoCos.value = expoMeasure === 'energy' ? 1 : 0;
+  const full = expoFull(expoSamples) || 1;
+  expoUniforms.expoMax.value = full;
+  renderExposurePanel(full);
+}
+const dateLabel = (day) => new Date(Date.UTC(2026, 0, day)).toLocaleDateString([], { day: 'numeric', month: 'short', timeZone: 'UTC' });
+function renderExposurePanel(full = expoUniforms.expoMax.value) {
+  ctxExposure.hidden = !expoOn;
+  btnExposure.setAttribute('aria-pressed', expoOn);
+  if (!expoOn) return;
+  ctxExposure.querySelectorAll('[data-period]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.period === expoPeriod));
+  ctxExposure.querySelectorAll('[data-measure]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.measure === expoMeasure));
+  expoDayEl.hidden = document.getElementById('expo-day-out').hidden = expoPeriod !== 'day';
+  expoDayEl.value = sunDay;
+  document.getElementById('expo-day-out').textContent = dateLabel(sunDay);
+  const hours = expoMeasure === 'hours';
+  const when = expoPeriod === 'day' ? `on ${dateLabel(sunDay)}` : 'a day, averaged over the year';
+  document.getElementById('expo-title').textContent = hours ? `Hours of direct sun ${when}` : `Direct sun, kWh/m² ${when}`;
+  const fmt = (v) => (hours ? `${v.toFixed(1)} h` : v.toFixed(1));
+  document.getElementById('expo-ticks').innerHTML = [0, 0.25, 0.5, 0.75, 1].map((f) => `<span>${fmt(full * f)}</span>`).join('');
+  document.getElementById('expo-info').textContent = hours
+    ? `Darkest: sun all day. Direct sun, clear sky, shadows of every cube in view.`
+    : `Darkest: the best-facing surface. Direct beam, clear sky, shadows of every cube in view.`;
+  applyInsets();
+}
+// Called every frame while on: new maps when the cubes, the date or the period changed (at most
+// five times a second while the cubes are on the move).
+function updateExposure() {
+  let key = `${expoPeriod}|${expoPeriod === 'day' ? sunDay : ''}|`;
+  for (const [id, b] of Object.entries(blocks)) {
+    if (!b.holder.visible || !b.raw) continue;
+    const h = b.holder;
+    key += `${id}:${b.raw.uuid}:${h.position.x.toFixed(4)},${h.position.y.toFixed(4)},${h.position.z.toFixed(4)},${h.scale.x.toFixed(3)};`;
+  }
+  if (key === expoKey) return;
+  const now = performance.now();
+  if (now - expoAt < 200) return;
+  const datesChanged = !expoKey || expoKey.split('|').slice(0, 2).join('|') !== key.split('|').slice(0, 2).join('|');
+  expoKey = key;
+  expoAt = now;
+  if (datesChanged || !expoSamples.length) { expoSamples = makeSamples(); applyExposureWeights(); }
+  renderExposureMaps();
+}
+function setExposure(on) {
+  expoOn = on;
+  expoUniforms.expoOn.value = on ? 1 : 0;
+  if (on) { expoKey = ''; expoAt = 0; expoSamples = makeSamples(); applyExposureWeights(); updateExposure(); }
+  renderExposurePanel();
+}
+btnExposure.onclick = () => setExposure(!expoOn);
+ctxExposure.querySelectorAll('[data-period]').forEach((b) => { b.onclick = () => { expoPeriod = b.dataset.period; expoKey = ''; expoAt = 0; updateExposure(); renderExposurePanel(); }; });
+ctxExposure.querySelectorAll('[data-measure]').forEach((b) => { b.onclick = () => { expoMeasure = b.dataset.measure; applyExposureWeights(); }; });
+expoDayEl.oninput = () => { sunDay = Number(expoDayEl.value); if (sunOn) applyLight(); expoAt = 0; updateExposure(); renderExposurePanel(); };
+queueMicrotask(() => setExposure(expoOn));   // once everything above and below is set up
 
 // ---------- interfaces: 2D drawings of the faces where a group's cube touches another cube
 const sheetEl = document.getElementById('sheet');
@@ -3811,9 +4072,10 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
     shader.uniforms.rockScale = { value: metresPerUnit / ROCK_TILE_M };
     shader.uniforms.rockMetres = { value: metresPerUnit };
     shader.uniforms.rockOrigin = { value: origin };
+    Object.assign(shader.uniforms, expoUniforms);
     shader.vertexShader = shader.vertexShader
-      .replace('#include <common>', '#include <common>\nuniform vec3 rockOrigin;\nvarying vec3 vRockPos;\nvarying vec3 vRockNormal;\nvarying float vRockZ;')
-      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRockPos = position - rockOrigin;\nvRockNormal = normal;\nvRockZ = position.z;');
+      .replace('#include <common>', '#include <common>\nuniform vec3 rockOrigin;\nvarying vec3 vRockPos;\nvarying vec3 vRockNormal;\nvarying float vRockZ;\nvarying vec3 vExpoW;\nvarying vec3 vExpoN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRockPos = position - rockOrigin;\nvRockNormal = normal;\nvRockZ = position.z;\nvExpoW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvExpoN = normalize(mat3(modelMatrix) * objectNormal);');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         uniform sampler2D rockMap;
@@ -3834,6 +4096,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
           vec3 grad = sign(det) * (dHdxy.x * r1 + dHdxy.y * r2);
           return normalize(abs(det) * surfNorm - grad);
         }`)
+      .replace('#include <packing>', `#include <packing>${EXPO_GLSL}`)
       .replace('#include <map_fragment>', `#include <map_fragment>
         float rockH = 0.5;
         if (rockOn > 0.5) {
@@ -3849,6 +4112,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
         }
 `)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        if (expoOn > 0.5) gl_FragColor = vec4(expoColor(), 1.0);
         // inside faces seen through a cut (only where a model isn't closed; elsewhere the section caps
         // cover them): the same flat poché grey as the caps, without light or texture
         if (sectionOn > 0.5 && !gl_FrontFacing) gl_FragColor = vec4(0.361, 0.380, 0.408, 1.0);`)
@@ -4475,6 +4739,7 @@ renderer.setAnimationLoop(() => {
   const a = 1 - Math.exp(-dt * 7);
   if (animalsOn) updateCritters(dt);
   if (wildOn) updateWild(dt);
+  if (expoOn) updateExposure();
   if (sunOn && sunPlaying) {   // one hour of daylight per second
     sunMinutes += dt * 60;
     if (sunMinutes >= SUN_PLAY[1]) sunMinutes = SUN_PLAY[0];
