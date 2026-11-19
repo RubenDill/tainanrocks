@@ -272,8 +272,10 @@
   #ctx-rain .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
   #ctx-rain .ticks span:first-child { transform: none; }
   #ctx-rain .ticks span:last-child { transform: translateX(-100%); }
-  #ctx-rain .check { display: flex; align-items: center; gap: 6px; font-weight: 650; cursor: pointer; }
-  #ctx-rain .check input { accent-color: var(--ink); width: 16px; height: 16px; margin: 0; }
+  #ctx-wind { grid-template-columns: auto auto; }
+  #ctx-wind .ramp { background: linear-gradient(90deg, #184f95, #6da7ec 25%, #f0efec 50%, #ea7f7b 75%, #931f22); }
+  .expopanel .check { display: flex; align-items: center; gap: 6px; font-weight: 650; cursor: pointer; }
+  .expopanel .check input { accent-color: var(--ink); width: 16px; height: 16px; margin: 0; }
 
   /* animals' speech bubbles */
   .emote { opacity: 0; transition: opacity .25s; pointer-events: none; }
@@ -445,6 +447,18 @@
       </div>
       <small id="rain-info"></small>
     </div>
+    <div class="context expopanel" id="ctx-wind" hidden>
+      <div class="seg" role="group" aria-label="Wind from">
+        <button type="button" data-from="N">N</button><button type="button" data-from="NE">NE</button><button type="button" data-from="E">E</button><button type="button" data-from="SE">SE</button><button type="button" data-from="S">S</button><button type="button" data-from="SW">SW</button><button type="button" data-from="W">W</button><button type="button" data-from="NW">NW</button>
+      </div>
+      <label class="check"><input type="checkbox" id="wind-trails" checked> Trails</label>
+      <div class="legend">
+        <b>Wind near the surfaces, against the open wind</b>
+        <div class="ramp" aria-hidden="true"></div>
+        <div class="ticks"><span>still</span><span>0.5×</span><span>1× open wind</span><span>1.5×</span><span>2×</span></div>
+      </div>
+      <small id="wind-info"></small>
+    </div>
   </div>
 </div>
 
@@ -504,6 +518,7 @@
           <button id="btn-sun" aria-pressed="false" title="Sunlight for a date and time (S)"><kbd>S</kbd> Sun</button>
           <button id="btn-exposure" aria-pressed="false" title="Heatmap of the direct sunlight every surface gets over a day or a year, with the shadows of all the cubes (E)"><kbd>E</kbd> Sun exposure</button>
           <button id="btn-rain" aria-pressed="false" title="Rain: where it falls, how it runs over the stone, where it drips and pools (D)"><kbd>D</kbd> Rain</button>
+          <button id="btn-wind" aria-pressed="false" title="Wind: how the air flows round and through the cubes, from the NE by default (V)"><kbd>V</kbd> Wind</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
           <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
         </div>
@@ -1669,6 +1684,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'w') setWild(!wildOn);
   else if (k === 'e') setExposure(!expoOn);
   else if (k === 'd') setRain(!rainOn);
+  else if (k === 'v') setWind(!windOn);
   else if (k === 't') setRock(!rockOn);
   else if (k === 'x') setSection(!sectionOn);
   else if (k === 'g') setGrid(!gridOn);
@@ -2273,6 +2289,7 @@ function updateExposure() {
 function setExposure(on) {
   expoOn = on;
   if (on && rainOn) setRain(false);   // one heatmap at a time
+  if (on && windOn) setWind(false);
   expoUniforms.expoOn.value = on ? 1 : 0;
   if (on) { expoKey = ''; expoAt = 0; expoSamples = makeSamples(); applyExposureWeights(); updateExposure(); }
   renderExposurePanel();
@@ -4378,6 +4395,7 @@ function renderRainPanel() {
 function setRain(on) {
   rainOn = on;
   if (on && expoOn) setExposure(false);   // one heatmap at a time
+  if (on && windOn) setWind(false);
   rainOnU.value = on ? 1 : 0;
   if (!on) { rainPoints.visible = false; }
   renderRainPanel();
@@ -4391,6 +4409,302 @@ document.getElementById('rain-drops').onchange = (e) => { rainDropsShown = e.tar
     .map(([v, label]) => `<span style="left:${(rainLevel(v) * 100).toFixed(1)}%">${label}</span>`).join('');
 }
 queueMicrotask(() => setRain(rainOn));
+
+// ---------- wind (V): how the air moves round and through the cubes. A lattice-Boltzmann simulation
+// (D3Q19, with a Smagorinsky eddy viscosity) on a voxel grid of the cubes on show and the ground,
+// with the wind coming in from the chosen direction (Tainan's prevailing NE by default) over a
+// domain that reaches well upwind, to the sides, above and (furthest) downwind. It runs in a worker,
+// so the screen stays smooth, and sends back the air's velocity a few times a second: the cubes are
+// coloured by the time-averaged wind speed just off their surfaces against the open wind (blue
+// sheltered, grey the same, red faster: where it squeezes through a void or round an edge), and
+// trails of air drift through the flow. A coarse, low-Reynolds-number model: the pattern (which
+// voids the wind blows through, which are still, where it speeds up) is the point, not exact numbers.
+const WIND_RAMP = ['#184f95', '#6da7ec', '#f0efec', '#ea7f7b', '#931f22'];   // diverging: still · open wind · twice as fast
+const WIND_DIRS = { N: [0, 1], NE: [1, 1], E: [1, 0], SE: [1, -1], S: [0, -1], SW: [-1, -1], W: [-1, 0], NW: [-1, 1] };   // [east, north]
+const WIND_NAMES = { N: 'north', NE: 'north-east', E: 'east', SE: 'south-east', S: 'south', SW: 'south-west', W: 'west', NW: 'north-west' };
+const WIND_U = 0.1;   // the open wind, in lattice units
+const windUniforms = {
+  windOn: { value: 0 },
+  windTex: { value: RAIN_EMPTY },
+  windO: { value: new THREE.Vector3() },
+  windCell: { value: 1 },
+  windDims: { value: new THREE.Vector3(1, 1, 1) },
+  windRamp: { value: WIND_RAMP.map((c) => new THREE.Vector3(...[1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255))) },
+};
+const WIND_GLSL = `
+  uniform float windOn;
+  uniform highp sampler3D windTex;
+  uniform vec3 windO;
+  uniform float windCell;
+  uniform vec3 windDims;
+  uniform vec3 windRamp[5];
+  vec3 windColor() {
+    // the air a cell and a half off the surface, on whichever side is open (solid cells read 0)
+    vec3 g = (vExpoW - windO) / windCell, n = normalize(vExpoN) * 1.5;
+    float t = max(texture(windTex, (g + n + 0.5) / windDims).r, texture(windTex, (g - n + 0.5) / windDims).r);
+    float e = clamp(t, 0.0, 1.0) * 4.0;
+    int k = int(min(floor(e), 3.0));
+    vec3 a = windRamp[0], b = windRamp[1];
+    if (k == 1) { a = windRamp[1]; b = windRamp[2]; } else if (k == 2) { a = windRamp[2]; b = windRamp[3]; } else if (k == 3) { a = windRamp[3]; b = windRamp[4]; }
+    vec3 col = mix(a, b, e - float(k));
+    return col * (0.92 + 0.08 * abs(dot(normalize(vExpoN), normalize(vec3(-0.35, -0.5, 0.8)))));
+  }`;
+
+// D3Q19 lattice Boltzmann: BGK with a Smagorinsky eddy viscosity (stable at the low viscosity a
+// coarse grid needs), pull streaming, halfway bounce-back on solids, the free stream coming in at
+// the domain's faces. The cell update is generated unrolled, with the lattice's constants written
+// in, which is several times quicker in JavaScript than looping over the 19 directions. It runs in
+// the wind's worker (its source is sent there as text).
+function makeLBM({ nx, ny, nz, solid, u0, tau0 = 0.52, cs = 0.14 }) {
+  const N = nx * ny * nz, NXY = nx * ny;
+  const E = [[0,0,0],[1,0,0],[-1,0,0],[0,1,0],[0,-1,0],[0,0,1],[0,0,-1],[1,1,0],[-1,-1,0],[1,-1,0],[-1,1,0],[1,0,1],[-1,0,-1],[1,0,-1],[-1,0,1],[0,1,1],[0,-1,-1],[0,1,-1],[0,-1,1]];
+  const W = E.map((e, q) => (q === 0 ? 1 / 3 : Math.abs(e[0]) + Math.abs(e[1]) + Math.abs(e[2]) === 1 ? 1 / 18 : 1 / 36));
+  const OPP = E.map((e) => E.findIndex((g) => g[0] === -e[0] && g[1] === -e[1] && g[2] === -e[2]));
+  const OFF = E.map((e) => e[0] + e[1] * nx + e[2] * NXY);
+  let f = new Float32Array(19 * N), g = new Float32Array(19 * N);
+  const [ux0, uy0, uz0] = u0, usq0 = ux0 * ux0 + uy0 * uy0 + uz0 * uz0;
+  const feq0 = E.map((e, q) => { const eu = e[0] * ux0 + e[1] * uy0 + e[2] * uz0; return W[q] * (1 + 3 * eu + 4.5 * eu * eu - 1.5 * usq0); });
+  for (let q = 0; q < 19; q++) f.fill(feq0[q], q * N, (q + 1) * N);
+  const ux = new Float32Array(N), uy = new Float32Array(N), uz = new Float32Array(N);
+  const k2 = 18 * Math.SQRT2 * cs * cs;
+  const term = (c, v) => (c === 0 ? '' : c === 1 ? `+${v}` : `-${v}`);
+  // reading direction q into a local: from the upstream neighbour, or bounced back off a solid, or
+  // (on the domain's faces) the free stream
+  const read = (q, edge) => {
+    const src = `i-(${OFF[q]})`, own = `f[${OPP[q] * N}+i]`, nb = `f[${q * N}+${src}]`;
+    if (q === 0) return `const a0=f[i];`;
+    if (!edge) return `const a${q}=solid[${src}]?${own}:${nb};`;
+    const [ex, ey, ez] = E[q];
+    return `const a${q}=(x-(${ex})<0||y-(${ey})<0||z-(${ez})<0||x-(${ex})>=nx||y-(${ey})>=ny||z-(${ez})>=nz)?${feq0[q]}:(solid[${src}]?${own}:${nb});`;
+  };
+  const body = (edge) => {
+    let s = '';
+    for (let q = 0; q < 19; q++) s += read(q, edge);
+    s += `const rho=${E.map((e, q) => `a${q}`).join('+')};const ir=1/rho;`;
+    for (const [k, v] of [[0, 'vx'], [1, 'vy'], [2, 'vz']]) s += `const ${v}=(0${E.map((e, q) => term(e[k], `a${q}`)).join('')})*ir;`;
+    s += 'const u15=1-1.5*(vx*vx+vy*vy+vz*vz);';
+    for (let q = 0; q < 19; q++) {
+      const [ex, ey, ez] = E[q];
+      s += `const e${q}=${W[q]}*rho*(u15${q ? `+(0${term(ex, 'vx')}${term(ey, 'vy')}${term(ez, 'vz')})*(3+4.5*(0${term(ex, 'vx')}${term(ey, 'vy')}${term(ez, 'vz')}))` : ''});const d${q}=a${q}-e${q};`;
+    }
+    const P = (a, b) => `(0${E.map((e, q) => (e[a] * e[b] ? (e[a] * e[b] > 0 ? `+d${q}` : `-d${q}`) : '')).join('')})`;
+    s += `const pxx=${P(0, 0)},pyy=${P(1, 1)},pzz=${P(2, 2)},pxy=${P(0, 1)},pxz=${P(0, 2)},pyz=${P(1, 2)};`;
+    s += 'const Q=Math.sqrt(pxx*pxx+pyy*pyy+pzz*pzz+2*(pxy*pxy+pxz*pxz+pyz*pyz));';
+    s += `const om=2/(${tau0}+Math.sqrt(${tau0 * tau0}+${k2}*Q*ir));`;
+    for (let q = 0; q < 19; q++) s += `g[${q * N}+i]=a${q}-om*d${q};`;
+    s += 'ux[i]=vx;uy[i]=vy;uz[i]=vz;';
+    return s;
+  };
+  const src = `
+    for (let z = 0; z < nz; z++) {
+      const ez0 = z === 0 || z === nz - 1;
+      for (let y = 0; y < ny; y++) {
+        const ey0 = ez0 || y === 0 || y === ny - 1;
+        let i = y * nx + z * ${NXY};
+        for (let x = 0; x < nx; x++, i++) {
+          if (solid[i]) { ux[i] = 0; uy[i] = 0; uz[i] = 0; continue; }
+          if (ey0 || x === 0 || x === nx - 1) { ${body(true)} } else { ${body(false)} }
+        }
+      }
+    }`;
+  const kernel = new Function('f', 'g', 'solid', 'ux', 'uy', 'uz', 'nx', 'ny', 'nz', src);
+  function step() { kernel(f, g, solid, ux, uy, uz, nx, ny, nz); const t = f; f = g; g = t; }
+  return { step, ux, uy, uz };
+}
+
+const makeLBMSource = makeLBM.toString();
+const WIND_WORKER = `${makeLBMSource}
+self.onmessage = (e) => {
+  const { nx, ny, nz, solid, u0, steps, warm } = e.data;
+  const N = nx * ny * nz, L = makeLBM({ nx, ny, nz, solid, u0 });
+  const sum = new Float32Array(N);
+  let s = 0, nSum = 0;
+  const run = () => {
+    const t0 = performance.now();
+    while (s < steps && performance.now() - t0 < 250) {
+      L.step(); s++;
+      if (s > warm && s % 4 === 0) { for (let i = 0; i < N; i++) sum[i] += Math.hypot(L.ux[i], L.uy[i], L.uz[i]); nSum++; }
+    }
+    const mean = new Float32Array(N);
+    if (nSum) for (let i = 0; i < N; i++) mean[i] = sum[i] / nSum;
+    else for (let i = 0; i < N; i++) mean[i] = Math.hypot(L.ux[i], L.uy[i], L.uz[i]);
+    const ux = L.ux.slice(), uy = L.uy.slice(), uz = L.uz.slice();
+    self.postMessage({ step: s, steps, ux, uy, uz, mean }, [ux.buffer, uy.buffer, uz.buffer, mean.buffer]);
+    if (s < steps) setTimeout(run, 0);
+  };
+  run();
+};`;
+let windWorkerUrl = null;
+
+const ctxWind = document.getElementById('ctx-wind');
+const btnWind = document.getElementById('btn-wind');
+let windOn = params.get('airflow') === '1';
+let windFrom = WIND_DIRS[params.get('from')] ? params.get('from') : 'NE';
+let windTrails = true;
+let windSim = null, windTex = null;
+
+function windDirection() {   // where the air goes (world, horizontal): away from where it comes from
+  const [e, n] = WIND_DIRS[windFrom];
+  return EAST_VEC.clone().multiplyScalar(-e).addScaledVector(NORTH_VEC, -n).normalize();
+}
+function startWind() {
+  windSim?.worker.terminate();
+  windSim = null;
+  if (!act.length) return;
+  const d = windDirection();
+  const H = Math.max(region.max.z - groundZ, 0.05 * wildScale);
+  const up = 0.6 * H, side = 0.6 * H, down = 1.5 * H, top = 0.9 * H;
+  const min = region.min.clone(), max = region.max.clone();
+  for (const [k, comp] of [['x', d.x], ['y', d.y]]) {
+    if (comp > 0.3) { min[k] -= up; max[k] += down; }        // the air goes towards +k: upwind is -k
+    else if (comp < -0.3) { min[k] -= down; max[k] += up; }
+    else { min[k] -= side; max[k] += side; }
+  }
+  min.z = groundZ; max.z = region.max.z + top;
+  const size = max.clone().sub(min);
+  const c = Math.max(0.012 * wildScale, Math.cbrt((size.x * size.y * size.z) / 300000));
+  min.z = groundZ - c;   // the bottom layer of cells is the ground
+  size.z += c;
+  const f = voxelize(act.map((a) => ({ raw: a.raw, k: a.raw.scale.x * a.s, o: a.h.position.clone().sub(a.b.center.clone().multiplyScalar(a.s)) })), min, size, c, 0);
+  const { nx, ny, nz } = f, N = nx * ny * nz, solid = new Uint8Array(N);
+  for (let i = 0; i < N; i++) solid[i] = f.sd[i] < 0 || i < nx * ny ? 1 : 0;
+  windWorkerUrl ||= URL.createObjectURL(new Blob([WIND_WORKER], { type: 'text/javascript' }));
+  const worker = new Worker(windWorkerUrl);
+  const steps = Math.round(Math.max(nx, ny) / WIND_U * 1.3), warm = Math.round(steps * 0.45);
+  windSim = { key: layoutSig + windFrom, worker, f, solid, nx, ny, nz, d, step: 0, steps, ux: null, uy: null, uz: null };
+  worker.onmessage = (e) => {
+    if (!windSim || windSim.worker !== worker) return;
+    Object.assign(windSim, { step: e.data.step, ux: e.data.ux, uy: e.data.uy, uz: e.data.uz });
+    uploadWind(e.data.mean);
+    renderWindPanel();
+  };
+  worker.postMessage({ nx, ny, nz, solid, u0: [d.x * WIND_U, d.y * WIND_U, 0], steps, warm });
+  windTrailsReset();
+}
+function uploadWind(mean) {
+  const { f, nx, ny, nz } = windSim;
+  if (!windTex || windTex.image.width !== nx || windTex.image.height !== ny || windTex.image.depth !== nz) {
+    windTex?.dispose();
+    windTex = new THREE.Data3DTexture(new Uint8Array(nx * ny * nz), nx, ny, nz);
+    windTex.format = THREE.RedFormat; windTex.minFilter = windTex.magFilter = THREE.LinearFilter; windTex.unpackAlignment = 1;
+  }
+  const out = windTex.image.data;
+  for (let i = 0; i < out.length; i++) out[i] = Math.round(255 * Math.min(1, mean[i] / WIND_U / 2));   // 0 · 1× · 2×
+  windTex.needsUpdate = true;
+  windUniforms.windTex.value = windTex;
+  windUniforms.windO.value.set(f.ox, f.oy, f.oz);
+  windUniforms.windCell.value = f.c;
+  windUniforms.windDims.value.set(nx, ny, nz);
+}
+
+// ---- trails of air, carried by the latest flow
+const WIND_P = 1000, WIND_TAIL = 9;
+const windGeo = new THREE.BufferGeometry();
+windGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(WIND_P * (WIND_TAIL - 1) * 2 * 3), 3));
+windGeo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(WIND_P * (WIND_TAIL - 1) * 2 * 4), 4));
+const windLines = new THREE.LineSegments(windGeo, new THREE.LineBasicMaterial({ vertexColors: true, transparent: true, depthWrite: false }));
+windLines.frustumCulled = false;
+windLines.visible = false;
+scene.add(windLines);
+let windParts = [];
+function windTrailsReset() { windParts = []; windGeo.setDrawRange(0, 0); }
+function windVel(p, out) {   // the flow at p, in the open wind's units (1 = the open wind); null in the stone or outside
+  const s = windSim, f = s.f;
+  const gx = (p.x - f.ox) / f.c, gy = (p.y - f.oy) / f.c, gz = (p.z - f.oz) / f.c;
+  if (gx < 0 || gy < 0 || gz < 0 || gx > s.nx - 1 || gy > s.ny - 1 || gz > s.nz - 1) return null;
+  const i = Math.min(s.nx - 2, Math.floor(gx)), j = Math.min(s.ny - 2, Math.floor(gy)), k = Math.min(s.nz - 2, Math.floor(gz));
+  const u = gx - i, v = gy - j, w = gz - k, X = 1, Y = s.nx, Z = s.nx * s.ny, a = i + j * Y + k * Z;
+  if (s.solid[Math.round(gx) + Math.round(gy) * Y + Math.round(gz) * Z]) return null;
+  const tri = (A) => {
+    const c00 = A[a] + (A[a + X] - A[a]) * u, c10 = A[a + Y] + (A[a + Y + X] - A[a + Y]) * u;
+    const c01 = A[a + Z] + (A[a + Z + X] - A[a + Z]) * u, c11 = A[a + Z + Y] + (A[a + Z + Y + X] - A[a + Z + Y]) * u;
+    const c0 = c00 + (c10 - c00) * v, c1 = c01 + (c11 - c01) * v;
+    return (c0 + (c1 - c0) * w) / WIND_U;
+  };
+  return out.set(tri(s.ux), tri(s.uy), tri(s.uz));
+}
+function windSpawn(r) {
+  // most start upwind of the cubes, at every height they reach; some anywhere near them
+  const s = windSim, H = region.max.z - groundZ, box = region.clone().expandByScalar(0.25 * H);
+  for (let tries = 0; tries < 10; tries++) {
+    const p = new THREE.Vector3(rand(box.min.x, box.max.x), rand(box.min.y, box.max.y), groundZ + rand(0.03, 1.2) * H);
+    const reach = Math.hypot(region.max.x - region.min.x, region.max.y - region.min.y) / 2 + 0.15 * H;
+    if (Math.random() < 0.7) p.addScaledVector(s.d, -(p.clone().sub(region.getCenter(tmpC)).dot(s.d) + reach));
+    if (windVel(p, tmpU)) { r.pts = [p]; r.age = 0; r.life = rand(4, 9); return; }
+  }
+  r.pts = []; r.age = 0; r.life = 1;
+}
+function updateWindTrails(dt) {
+  const s = windSim;
+  windLines.visible = windOn && windTrails && !!s && !!s.ux;
+  if (!windLines.visible) return;
+  while (windParts.length < WIND_P) { const r = {}; windSpawn(r); r.age = -Math.random() * 3; windParts.push(r); }
+  const speed = 0.22 * wildScale;   // the open wind, slowed right down so it can be followed
+  const pos = windGeo.attributes.position.array, col = windGeo.attributes.color.array;
+  let n = 0;
+  const v = new THREE.Vector3();
+  for (const r of windParts) {
+    r.age += dt;
+    if (r.age < 0) continue;
+    const head = r.pts[r.pts.length - 1];
+    if (!head || r.age > r.life || !windVel(head, v)) { windSpawn(r); continue; }
+    if (v.lengthSq() < 0.0004 && r.age > 1.5) { windSpawn(r); continue; }   // stuck in still air
+    // a little Runge-Kutta, so trails round the corners instead of cutting them
+    const mid = head.clone().addScaledVector(v, speed * dt * 0.5);
+    const v2 = windVel(mid, new THREE.Vector3()) || v;
+    const next = head.clone().addScaledVector(v2, speed * dt);
+    r.pts.push(next);
+    if (r.pts.length > WIND_TAIL) r.pts.shift();
+    const fade = Math.min(1, r.age * 2, (r.life - r.age) * 2);
+    for (let k = 1; k < r.pts.length; k++) {
+      const a = r.pts[k - 1], b = r.pts[k];
+      const al0 = 0.6 * fade * (k - 1) / (WIND_TAIL - 1), al1 = 0.6 * fade * k / (WIND_TAIL - 1);
+      pos.set([a.x, a.y, a.z, b.x, b.y, b.z], n * 6);
+      col.set([0.118, 0.137, 0.165, al0, 0.118, 0.137, 0.165, al1], n * 8);
+      n++;
+    }
+  }
+  windGeo.setDrawRange(0, n * 2);
+  windGeo.attributes.position.needsUpdate = true;
+  windGeo.attributes.color.needsUpdate = true;
+}
+
+function updateWind(dt) {
+  for (const b of Object.values(blocks)) b.holder.updateMatrixWorld();
+  buildQueuedField();
+  refreshActive();
+  const key = layoutSig + windFrom;
+  if (windSim && windSim.key !== key) { windSim.worker.terminate(); windSim = null; windUniforms.windTex.value = RAIN_EMPTY; windTrailsReset(); renderWindPanel(); }
+  const waiting = Object.values(blocks).some((b) => b.holder.visible && b.holder.userData.scale === 1 && b.raw && !fields.has(b.raw));
+  if (settled && !waiting && !windSim) { startWind(); renderWindPanel(); }
+  updateWindTrails(dt);
+}
+function renderWindPanel() {
+  ctxWind.hidden = !windOn;
+  btnWind.setAttribute('aria-pressed', windOn);
+  if (!windOn) return;
+  ctxWind.querySelectorAll('[data-from]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.from === windFrom));
+  document.getElementById('wind-trails').checked = windTrails;
+  const s = windSim;
+  const cm = s ? (s.f.c * 100).toFixed(1) : '';
+  document.getElementById('wind-info').textContent = !s
+    ? 'Waiting for the cubes…'
+    : s.step < s.steps ? `Simulating the air… ${Math.round(100 * s.step / s.steps)}% (${cm} cm cells)`
+    : `Wind from the ${WIND_NAMES[windFrom]}, averaged over the last part of the run (${cm} cm cells). Tainan's winter monsoon blows from the NE, the summer one from the SW.`;
+  applyInsets();
+}
+function setWind(on) {
+  windOn = on;
+  if (on && expoOn) setExposure(false);   // one heatmap at a time
+  if (on && rainOn) setRain(false);
+  windUniforms.windOn.value = on ? 1 : 0;
+  if (!on) { windSim?.worker.terminate(); windSim = null; windUniforms.windTex.value = RAIN_EMPTY; windLines.visible = false; windTrailsReset(); }
+  renderWindPanel();
+}
+btnWind.onclick = () => setWind(!windOn);
+ctxWind.querySelectorAll('[data-from]').forEach((b) => { b.onclick = () => { windFrom = b.dataset.from; renderWindPanel(); }; });
+document.getElementById('wind-trails').onchange = (e) => { windTrails = e.target.checked; };
+queueMicrotask(() => setWind(windOn));
 
 // ---------- rock (T): a coarse, sandy, 3D-printed-stone surface. The texture is generated here
 // (colour in RGB, height in alpha) and projected onto the cubes from three sides (Rhino meshes carry
@@ -4416,7 +4730,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
     shader.uniforms.rockScale = { value: metresPerUnit / ROCK_TILE_M };
     shader.uniforms.rockMetres = { value: metresPerUnit };
     shader.uniforms.rockOrigin = { value: origin };
-    Object.assign(shader.uniforms, expoUniforms, rainUniforms);
+    Object.assign(shader.uniforms, expoUniforms, rainUniforms, windUniforms);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nuniform vec3 rockOrigin;\nvarying vec3 vRockPos;\nvarying vec3 vRockNormal;\nvarying float vRockZ;\nvarying vec3 vExpoW;\nvarying vec3 vExpoN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRockPos = position - rockOrigin;\nvRockNormal = normal;\nvRockZ = position.z;\nvExpoW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvExpoN = normalize(mat3(modelMatrix) * objectNormal);');
@@ -4440,7 +4754,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
           vec3 grad = sign(det) * (dHdxy.x * r1 + dHdxy.y * r2);
           return normalize(abs(det) * surfNorm - grad);
         }`)
-      .replace('#include <packing>', `#include <packing>${EXPO_GLSL}${RAIN_GLSL}`)
+      .replace('#include <packing>', `#include <packing>${EXPO_GLSL}${RAIN_GLSL}${WIND_GLSL}`)
       .replace('#include <map_fragment>', `#include <map_fragment>
         float rockH = 0.5;
         if (rockOn > 0.5) {
@@ -4458,6 +4772,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
         if (expoOn > 0.5) gl_FragColor = vec4(expoColor(), 1.0);
         else if (rainOn > 0.5) gl_FragColor = vec4(rainColor(), 1.0);
+        else if (windOn > 0.5) gl_FragColor = vec4(windColor(), 1.0);
         // inside faces seen through a cut (only where a model isn't closed; elsewhere the section caps
         // cover them): the same flat poché grey as the caps, without light or texture
         if (sectionOn > 0.5 && !gl_FrontFacing) gl_FragColor = vec4(0.361, 0.380, 0.408, 1.0);`)
@@ -5086,6 +5401,7 @@ renderer.setAnimationLoop(() => {
   if (wildOn) updateWild(dt);
   if (expoOn) updateExposure();
   if (rainOn) updateRain(dt);
+  if (windOn) updateWind(dt);
   if (sunOn && sunPlaying) {   // one hour of daylight per second
     sunMinutes += dt * 60;
     if (sunMinutes >= SUN_PLAY[1]) sunMinutes = SUN_PLAY[0];
