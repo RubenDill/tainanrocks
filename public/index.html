@@ -266,6 +266,14 @@
   .expopanel small { grid-column: 1 / -1; color: var(--muted); max-width: 46ch; line-height: 1.35; }
   .expopanel [hidden] { display: none !important; }
   .expopanel input[type=range] { width: 100%; min-width: 0; }
+  #ctx-rain { grid-template-columns: auto minmax(90px, 170px) 4ch auto; }
+  #ctx-rain .ramp { background: linear-gradient(90deg, #f3f6fa, #b7d3f6 25%, #5598e7 50%, #256abf 75%, #0d366b); }
+  #ctx-rain .ticks { position: relative; display: block; height: 16px; }
+  #ctx-rain .ticks span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
+  #ctx-rain .ticks span:first-child { transform: none; }
+  #ctx-rain .ticks span:last-child { transform: translateX(-100%); }
+  #ctx-rain .check { display: flex; align-items: center; gap: 6px; font-weight: 650; cursor: pointer; }
+  #ctx-rain .check input { accent-color: var(--ink); width: 16px; height: 16px; margin: 0; }
 
   /* animals' speech bubbles */
   .emote { opacity: 0; transition: opacity .25s; pointer-events: none; }
@@ -423,6 +431,20 @@
       </div>
       <small id="expo-info"></small>
     </div>
+    <div class="context expopanel" id="ctx-rain" hidden>
+      <div class="seg" role="group" aria-label="Wind">
+        <button type="button" data-wind="none" title="No wind: rain falls straight down">Still</button><button type="button" data-wind="N" title="Wind from the north">N</button><button type="button" data-wind="E" title="Wind from the east">E</button><button type="button" data-wind="S" title="Wind from the south">S</button><button type="button" data-wind="W" title="Wind from the west">W</button>
+      </div>
+      <input id="rain-slant" type="range" min="5" max="60" step="5" aria-label="How far the wind slants the rain from vertical">
+      <output id="rain-slant-out" for="rain-slant"></output>
+      <label class="check"><input type="checkbox" id="rain-drops" checked> Drops</label>
+      <div class="legend">
+        <b>Water received, compared with open flat ground (log scale)</b>
+        <div class="ramp" aria-hidden="true"></div>
+        <div class="ticks" id="rain-ticks"></div>
+      </div>
+      <small id="rain-info"></small>
+    </div>
   </div>
 </div>
 
@@ -481,6 +503,7 @@
         <div class="menu" id="menu-env" role="group" aria-label="Environment" hidden>
           <button id="btn-sun" aria-pressed="false" title="Sunlight for a date and time (S)"><kbd>S</kbd> Sun</button>
           <button id="btn-exposure" aria-pressed="false" title="Heatmap of the direct sunlight every surface gets over a day or a year, with the shadows of all the cubes (E)"><kbd>E</kbd> Sun exposure</button>
+          <button id="btn-rain" aria-pressed="false" title="Rain: where it falls, how it runs over the stone, where it drips and pools (D)"><kbd>D</kbd> Rain</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
           <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
         </div>
@@ -1645,6 +1668,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'a') setAnimals(!animalsOn);
   else if (k === 'w') setWild(!wildOn);
   else if (k === 'e') setExposure(!expoOn);
+  else if (k === 'd') setRain(!rainOn);
   else if (k === 't') setRock(!rockOn);
   else if (k === 'x') setSection(!sectionOn);
   else if (k === 'g') setGrid(!gridOn);
@@ -2248,6 +2272,7 @@ function updateExposure() {
 }
 function setExposure(on) {
   expoOn = on;
+  if (on && rainOn) setRain(false);   // one heatmap at a time
   expoUniforms.expoOn.value = on ? 1 : 0;
   if (on) { expoKey = ''; expoAt = 0; expoSamples = makeSamples(); applyExposureWeights(); updateExposure(); }
   renderExposurePanel();
@@ -3295,76 +3320,87 @@ function sqDist(mask, want, nx, ny, nz) {
   pass(nz, nx * ny, (c, q) => c + q * nx * ny);
   return D;
 }
-function buildField(b) {
-  const raw = b.raw, rs = raw.scale.x, cen = b.center, box = b.box;
-  const size = box.getSize(new THREE.Vector3());
-  const c = Math.max(size.x, size.y, size.z) / 44, M = 6;
+// Voxels by counting crossings (each source on its own, so cubes that share a face stay solid
+// together), then a signed distance transform. Sources: models whose vertices map by v * k + o.
+function voxelize(sources, min, size, c, M) {
   const nx = Math.ceil(size.x / c) + 2 * M, ny = Math.ceil(size.y / c) + 2 * M, nz = Math.ceil(size.z / c) + 2 * M;
-  const ox = box.min.x - cen.x - (M - 0.5) * c, oy = box.min.y - cen.y - (M - 0.5) * c, oz = box.min.z - cen.z - (M - 0.5) * c;
-  const cols = new Array(nx * ny);
+  const ox = min.x - (M - 0.5) * c, oy = min.y - (M - 0.5) * c, oz = min.z - (M - 0.5) * c;
+  const NXY = nx * ny, N = NXY * nz, solid = new Uint8Array(N);
   const jx = 0.01371 * c, jy = 0.00733 * c;   // so no column runs exactly along an edge
-  raw.traverse((o) => {
-    if (!o.isMesh || o.userData.blockId === undefined) return;
-    const pos = o.geometry.attributes.position, idx = o.geometry.index;
-    const count = idx ? idx.count : pos.count;
-    const P = new Float64Array(9);
-    for (let t = 0; t < count; t += 3) {
-      for (let v = 0; v < 3; v++) {
-        const vi = idx ? idx.getX(t + v) : t + v;
-        P[3 * v] = pos.getX(vi) * rs - cen.x; P[3 * v + 1] = pos.getY(vi) * rs - cen.y; P[3 * v + 2] = pos.getZ(vi) * rs - cen.z;
+  const eps = 1e-6 * Math.max(size.x, size.y, size.z);
+  for (const src of sources) {
+    const cols = new Array(NXY), { k: sk, o: so } = src;
+    src.raw.traverse((o) => {
+      if (!o.isMesh || o.userData.blockId === undefined) return;
+      const pos = o.geometry.attributes.position, idx = o.geometry.index;
+      const count = idx ? idx.count : pos.count;
+      const P = new Float64Array(9);
+      for (let t = 0; t < count; t += 3) {
+        for (let v = 0; v < 3; v++) {
+          const vi = idx ? idx.getX(t + v) : t + v;
+          P[3 * v] = pos.getX(vi) * sk + so.x; P[3 * v + 1] = pos.getY(vi) * sk + so.y; P[3 * v + 2] = pos.getZ(vi) * sk + so.z;
+        }
+        const [ax, ay, az, bx, by, bz, cx, cy, cz] = P;
+        const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+        if (Math.abs(area) < 1e-14) continue;
+        const i0 = Math.max(0, Math.ceil((Math.min(ax, bx, cx) - ox - jx) / c)), i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) - ox - jx) / c));
+        const j0 = Math.max(0, Math.ceil((Math.min(ay, by, cy) - oy - jy) / c)), j1 = Math.min(ny - 1, Math.floor((Math.max(ay, by, cy) - oy - jy) / c));
+        for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+          const px = ox + i * c + jx, py = oy + j * c + jy;
+          const w0 = ((bx - px) * (cy - py) - (by - py) * (cx - px)) / area;
+          const w1 = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) / area;
+          const w2 = 1 - w0 - w1;
+          if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+          (cols[i + j * nx] ||= []).push(w0 * az + w1 * bz + w2 * cz);
+        }
       }
-      const [ax, ay, az, bx, by, bz, cx, cy, cz] = P;
-      const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
-      if (Math.abs(area) < 1e-14) continue;
-      const i0 = Math.max(0, Math.ceil((Math.min(ax, bx, cx) - ox - jx) / c)), i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) - ox - jx) / c));
-      const j0 = Math.max(0, Math.ceil((Math.min(ay, by, cy) - oy - jy) / c)), j1 = Math.min(ny - 1, Math.floor((Math.max(ay, by, cy) - oy - jy) / c));
-      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
-        const px = ox + i * c + jx, py = oy + j * c + jy;
-        const w0 = ((bx - px) * (cy - py) - (by - py) * (cx - px)) / area;
-        const w1 = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) / area;
-        const w2 = 1 - w0 - w1;
-        if (w0 < 0 || w1 < 0 || w2 < 0) continue;
-        (cols[i + j * nx] ||= []).push(w0 * az + w1 * bz + w2 * cz);
+    });
+    const odd = [];
+    for (let col = 0; col < NXY; col++) {
+      const zs = cols[col];
+      if (!zs) continue;
+      zs.sort((p, q) => p - q);
+      const u = [];
+      for (const z of zs) if (!u.length || z - u[u.length - 1] > eps) u.push(z);
+      if (u.length % 2) { odd.push(col); continue; }   // an open seam: take the neighbours' word for it
+      for (let q = 0; q < u.length; q += 2) {
+        const k0 = Math.max(0, Math.ceil((u[q] - oz) / c)), k1 = Math.min(nz - 1, Math.floor((u[q + 1] - oz) / c));
+        for (let k = k0; k <= k1; k++) solid[col + k * NXY] = 1;
       }
     }
-  });
-  const NXY = nx * ny, N = NXY * nz, solid = new Uint8Array(N), odd = [];
-  const eps = 1e-6 * size.z;
-  for (let col = 0; col < NXY; col++) {
-    const zs = cols[col];
-    if (!zs) continue;
-    zs.sort((p, q) => p - q);
-    const u = [];
-    for (const z of zs) if (!u.length || z - u[u.length - 1] > eps) u.push(z);
-    if (u.length % 2) { odd.push(col); continue; }   // an open seam: take the neighbours' word for it
-    for (let q = 0; q < u.length; q += 2) {
-      const k0 = Math.max(0, Math.ceil((u[q] - oz) / c)), k1 = Math.min(nz - 1, Math.floor((u[q + 1] - oz) / c));
-      for (let k = k0; k <= k1; k++) solid[col + k * NXY] = 1;
-    }
-  }
-  for (const col of odd) {
-    const i = col % nx, j = Math.floor(col / nx);
-    const nb = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]].filter(([p, q]) => p >= 0 && q >= 0 && p < nx && q < ny).map(([p, q]) => p + q * nx);
-    for (let k = 0; k < nz; k++) {
-      let n = 0;
-      for (const x of nb) n += solid[x + k * NXY];
-      if (n * 2 > nb.length) solid[col + k * NXY] = 1;
+    for (const col of odd) {
+      const i = col % nx, j = Math.floor(col / nx);
+      const nb = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]].filter(([p, q]) => p >= 0 && q >= 0 && p < nx && q < ny).map(([p, q]) => p + q * nx);
+      for (let k = 0; k < nz; k++) {
+        let n = 0;
+        for (const x of nb) n += solid[x + k * NXY];
+        if (n * 2 > nb.length) solid[col + k * NXY] = 1;
+      }
     }
   }
   const dOut = sqDist(solid, 1, nx, ny, nz), dIn = sqDist(solid, 0, nx, ny, nz);
   const sd = new Float32Array(N);
   for (let i = 0; i < N; i++) sd[i] = solid[i] ? -(Math.sqrt(dIn[i]) - 0.5) * c : (Math.sqrt(dOut[i]) - 0.5) * c;
   let edge = Infinity;
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++)
+    if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) edge = Math.min(edge, sd[i + j * nx + k * NXY]);
+  return { c, nx, ny, nz, ox, oy, oz, sd, edge };
+}
+// One cube's field, in holder-local metres (the model's centre at 0), with the places in it.
+function buildField(b) {
+  const size = b.box.getSize(new THREE.Vector3());
+  const c = Math.max(size.x, size.y, size.z) / 44, M = 6;
+  const f = voxelize([{ raw: b.raw, k: b.raw.scale.x, o: b.center.clone().negate() }], b.box.min.clone().sub(b.center), size, c, M);
+  const { nx, ny, nz, sd } = f, NXY = nx * ny;
   const air = [], surf = [];
   for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
     const at = i + j * nx + k * NXY, v = sd[at];
-    if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) edge = Math.min(edge, v);
     const inBox = i >= M && j >= M && k >= M && i < nx - M && j < ny - M && k < nz - M;
     const nearBox = i >= M - 1 && j >= M - 1 && k >= M - 1 && i <= nx - M && j <= ny - M && k <= nz - M;
     if (inBox && v >= 1.5 * c) air.push(at);
     if (nearBox && v >= 0 && v < c) surf.push(at);
   }
-  return { c, nx, ny, nz, ox, oy, oz, sd, edge, air: Int32Array.from(air), surf: Int32Array.from(surf) };
+  return Object.assign(f, { air: Int32Array.from(air), surf: Int32Array.from(surf) });
 }
 function fieldAt(f, gx, gy, gz) {   // trilinear, in cell coordinates
   const i = Math.min(f.nx - 2, Math.max(0, Math.floor(gx))), j = Math.min(f.ny - 2, Math.max(0, Math.floor(gy))), k = Math.min(f.nz - 2, Math.max(0, Math.floor(gz)));
@@ -4007,15 +4043,18 @@ class Wild {
 }
 
 const fieldClock = { last: 0 };
-function updateWild(dt) {
-  for (const b of Object.values(blocks)) b.holder.updateMatrixWorld();
-  // build at most one field a frame
+// Build at most one waiting distance field a frame (the wildlife and the rain share them).
+function buildQueuedField() {
   while (fieldQueue.length) {
     const b = fieldQueue.shift();
     if (!b.raw || fields.has(b.raw) || !b.box || b.box.isEmpty()) continue;
     fields.set(b.raw, buildField(b));
     break;
   }
+}
+function updateWild(dt) {
+  for (const b of Object.values(blocks)) b.holder.updateMatrixWorld();
+  buildQueuedField();
   refreshActive();
   if (settled && layoutSig !== settledSig) {   // the cubes came to rest somewhere new: check every way
     if (settledSig) for (const w of wild) w.validate();
@@ -4048,6 +4087,311 @@ function setWild(on) {
 btnWild.onclick = () => setWild(!wildOn);
 setWild(wildOn);
 
+// ---------- rain (D): where the water goes. Thousands of drops fall on the cubes (straight down, or
+// slanted by a wind from N, E, S or W) and are followed over the stone through the same distance
+// fields the wildlife moves in: each runs downhill along the surface, round edges and down walls,
+// drips off where the surface turns into an overhang (and lands on whatever is below, in another cube
+// too), and stops where it pools in a hollow or on a flat. Every cell of the field it wets is counted;
+// the count, against what the same area of open, flat ground would catch, is the heatmap: pale is
+// sheltered and dry, dark blue a channel or a pool that collects the runoff of a larger area. A few
+// hundred of the drops are kept and replayed, so you can watch the water move. The simulation runs a
+// few milliseconds a frame, so the map fills in, and starts over when the cubes settle somewhere new.
+const RAIN_RAMP = ['#f3f6fa', '#b7d3f6', '#5598e7', '#256abf', '#0d366b'];   // one hue, light (dry) to dark (wet)
+const RAIN_VMAX = 20;                                                         // the dark end: 20× open ground
+const rainLevel = (v) => Math.log1p(v) / Math.log1p(RAIN_VMAX);
+const RAIN_EMPTY = (() => { const t = new THREE.Data3DTexture(new Uint8Array([0]), 1, 1, 1); t.format = THREE.RedFormat; t.needsUpdate = true; return t; })();
+const rainOnU = { value: 0 };
+const RAIN_GLSL = `
+  uniform float rainOn;
+  uniform highp sampler3D rainTex;
+  uniform vec3 rainDims;
+  uniform vec3 rainO;
+  uniform float rainCell;
+  uniform vec3 rainRamp[5];
+  vec3 rainColor() {
+    // the wet cells lie just off the surface: look a cell out on both sides (normals may be flipped)
+    vec3 g = (vExpoW - rainO) / rainCell, n = normalize(vExpoN) * 0.9;
+    float t = max(texture(rainTex, (g + n + 0.5) / rainDims).r, texture(rainTex, (g - n + 0.5) / rainDims).r);
+    float e = clamp(t, 0.0, 1.0) * 4.0;
+    int k = int(min(floor(e), 3.0));
+    vec3 a = rainRamp[0], b = rainRamp[1];
+    if (k == 1) { a = rainRamp[1]; b = rainRamp[2]; } else if (k == 2) { a = rainRamp[2]; b = rainRamp[3]; } else if (k == 3) { a = rainRamp[3]; b = rainRamp[4]; }
+    vec3 col = mix(a, b, e - float(k));
+    vec3 wn = normalize(vExpoN);
+    return col * (0.92 + 0.08 * abs(dot(wn, normalize(vec3(-0.35, -0.5, 0.8)))));
+  }`;
+const rainUniforms = {
+  rainOn: rainOnU,
+  rainTex: { value: RAIN_EMPTY },
+  rainO: { value: new THREE.Vector3() },       // world position of the map's first cell
+  rainCell: { value: 1 },
+  rainDims: { value: new THREE.Vector3(1, 1, 1) },
+  rainRamp: { value: RAIN_RAMP.map((c) => new THREE.Vector3(...[1, 3, 5].map((i) => parseInt(c.slice(i, i + 2), 16) / 255))) },
+};
+
+const ctxRain = document.getElementById('ctx-rain');
+const btnRain = document.getElementById('btn-rain');
+const rainSlantEl = document.getElementById('rain-slant');
+let rainOn = params.get('rain') === '1';
+let rainWind = ['N', 'E', 'S', 'W'].includes(params.get('wind')) ? params.get('wind') : 'none';
+let rainSlant = Math.max(5, Math.min(60, num('slant', 30)));
+let rainDropsShown = true;
+let rainSim = null;
+let rainTex = null;
+
+// Distance to the stone (or the ground) and which way is out of it, at p (world), in the rain's own
+// field: all the cubes on show voxelised together where they stand, so cubes laid flush make one
+// flat surface (separate fields would leave a groove at every joint, and the water would find it).
+const rainHit = { d: 0, a: null, n: new THREE.Vector3(), g: [0, 0, 0] };
+function rainField(p, wantNormal) {
+  const f = rainSim.field;
+  let best = p.z - groundZ;
+  rainHit.n.set(0, 0, 1);
+  rainHit.a = null;
+  const gx = (p.x - f.ox) / f.c, gy = (p.y - f.oy) / f.c, gz = (p.z - f.oz) / f.c;
+  const ex = Math.max(0, -gx, gx - (f.nx - 1)), ey = Math.max(0, -gy, gy - (f.ny - 1)), ez = Math.max(0, -gz, gz - (f.nz - 1));
+  const v = ex || ey || ez ? Math.hypot(ex, ey, ez) * f.c + f.edge : fieldAt(f, gx, gy, gz);
+  if (v < best) { best = v; if (!(ex || ey || ez)) { rainHit.a = f; rainHit.g[0] = gx; rainHit.g[1] = gy; rainHit.g[2] = gz; } }
+  rainHit.d = best;
+  if (wantNormal && rainHit.a) {
+    const [gx, gy, gz] = rainHit.g, e = 0.5;
+    rainHit.n.set(fieldAt(f, gx + e, gy, gz) - fieldAt(f, gx - e, gy, gz), fieldAt(f, gx, gy + e, gz) - fieldAt(f, gx, gy - e, gz), fieldAt(f, gx, gy, gz + e) - fieldAt(f, gx, gy, gz - e));
+    if (rainHit.n.lengthSq() < 1e-12) rainHit.n.set(0, 0, 1); else rainHit.n.normalize();
+  }
+  return rainHit;
+}
+function rainDir() {
+  if (rainWind === 'none') return new THREE.Vector3(0, 0, -1);
+  const from = { N: NORTH_VEC, E: EAST_VEC, S: NORTH_VEC.clone().negate(), W: EAST_VEC.clone().negate() }[rainWind];
+  const t = Math.tan(THREE.MathUtils.degToRad(rainSlant));
+  return new THREE.Vector3(-from.x * t, -from.y * t, -1).normalize();   // blown away from where the wind comes from
+}
+function startRain() {
+  if (!act.length) { rainSim = null; return; }
+  const d = rainDir();
+  const u = new THREE.Vector3().crossVectors(d, Math.abs(d.z) < 0.99 ? new THREE.Vector3(0, 0, 1) : new THREE.Vector3(1, 0, 0)).normalize();
+  const v = new THREE.Vector3().crossVectors(d, u).normalize();
+  const box = region.clone().expandByScalar(0.01 * wildScale);
+  const c = box.getCenter(new THREE.Vector3()), R = box.getSize(new THREE.Vector3()).length() / 2;
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  for (const x of [box.min.x, box.max.x]) for (const y of [box.min.y, box.max.y]) for (const z of [box.min.z, box.max.z]) {
+    const q = new THREE.Vector3(x, y, z).sub(c), a = q.dot(u), b = q.dot(v);
+    lo = [Math.min(lo[0], a), Math.min(lo[1], b)]; hi = [Math.max(hi[0], a), Math.max(hi[1], b)];
+  }
+  // the field: about a centimetre a cell on a 45 cm cube, coarser if the view is very wide
+  const M = 4, rs = region.getSize(new THREE.Vector3());
+  let cell = Math.min(...act.map((a) => a.f.c * a.s));
+  cell = Math.max(cell, Math.cbrt(((rs.x + 2 * M * cell) * (rs.y + 2 * M * cell) * (rs.z + 2 * M * cell)) / 3e6));
+  const field = voxelize(act.map((a) => ({ raw: a.raw, k: a.raw.scale.x * a.s, o: a.h.position.clone().sub(a.b.center.clone().multiplyScalar(a.s)) })), region.min, rs, cell, M);
+  const sp = cell * 0.75;                                   // drops this far apart, across the rain
+  const na = Math.ceil((hi[0] - lo[0]) / sp), nb = Math.ceil((hi[1] - lo[1]) / sp);
+  // only the drops whose line meets a cube (in Matrix most of the sky is over the gaps)
+  const boxes = act.map((a) => a.wbox.clone().expandByScalar(sp)), ray = new THREE.Ray(), keep = [];
+  for (let i = 0; i < na * nb; i++) {
+    ray.origin.copy(c).addScaledVector(d, -R * 1.3).addScaledVector(u, lo[0] + ((i % na) + 0.5) * sp).addScaledVector(v, lo[1] + (Math.floor(i / na) + 0.5) * sp);
+    ray.direction.copy(d);
+    if (boxes.some((b) => ray.intersectsBox(b))) keep.push(i);
+  }
+  const order = Uint32Array.from(keep);
+  for (let i = order.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [order[i], order[j]] = [order[j], order[i]]; }   // random order: the map fills evenly
+  rainSim = { key: layoutSig + rainWind + rainSlant, field, d, u, v, c, R, lo, na, nb, sp, cell, order, i: 0, acc: new Float32Array(field.sd.length), paths: [], pools: 0, lastUpload: 0, pathEvery: Math.max(1, Math.floor(order.length / 700)) };
+  rainUniforms.rainTex.value = RAIN_EMPTY;
+  rainPointsReset();
+}
+
+// One drop: fall, then run over the stone, drip, fall again… Counts the cells it wets.
+function rainDrop(sim, k, path) {
+  const ia = k % sim.na, ib = Math.floor(k / sim.na);
+  const p = sim.c.clone().addScaledVector(sim.d, -sim.R * 1.3)
+    .addScaledVector(sim.u, sim.lo[0] + (ia + Math.random()) * sim.sp)
+    .addScaledVector(sim.v, sim.lo[1] + (ib + Math.random()) * sim.sp);
+  const cell = sim.cell, down = new THREE.Vector3(0, 0, -1);
+  let lastIdx = -1, t = 0;
+  const mark = (speed) => { if (path) { const prev = path.length ? path[path.length - 1] : null; if (prev) t += prev.p.distanceTo(p) / speed; path.push({ p: p.clone(), t }); } };
+  const f = sim.field;
+  const wet = (amount) => {
+    const gx = Math.round((p.x - f.ox) / f.c), gy = Math.round((p.y - f.oy) / f.c), gz = Math.round((p.z - f.oz) / f.c);
+    if (gx < 0 || gy < 0 || gz < 0 || gx >= f.nx || gy >= f.ny || gz >= f.nz) return;
+    const idx = gx + gy * f.nx + gz * f.nx * f.ny;
+    if (idx === lastIdx) return;   // once a cell per drop
+    sim.acc[idx] += amount;
+    lastIdx = idx;
+  };
+  // falls along dir until it meets the stone (true) or the ground / passes by (false)
+  const fall = (dir, maxDist) => {
+    let travelled = 0;
+    mark(1.2 * wildScale);
+    for (let n = 0; n < 600 && travelled < maxDist; n++) {
+      const h = rainField(p, false);
+      if (p.z - groundZ < cell) return false;
+      if (h.d < cell * 0.4) { mark(1.2 * wildScale); return true; }
+      const step = Math.max(h.d * 0.9, cell * 0.3);
+      p.addScaledVector(dir, step);
+      travelled += step;
+    }
+    return false;
+  };
+  if (!fall(sim.d, sim.R * 2.8)) return;
+  const tan = new THREE.Vector3(), back = p.clone(), drift = new THREE.Vector3();
+  let flat = 0;
+  for (let bounce = 0; bounce < 6; bounce++) {
+    wet(1);
+    let landed = false;
+    for (let n = 0; n < 700; n++) {
+      const h = rainField(p, true), nrm = h.n;
+      if (nrm.z < -0.3) {   // an overhang: it drips off, straight down
+        p.addScaledVector(nrm, cell * 0.6);
+        mark(0.08 * wildScale);
+        if (fall(down, sim.R * 2.5)) { landed = true; break; }
+        return;
+      }
+      tan.set(nrm.x * nrm.z, nrm.y * nrm.z, nrm.z * nrm.z - 1);   // gravity along the surface
+      const steep = tan.length();
+      if (steep < 0.07) {
+        // a flat: the water spreads (a drift that keeps its way, uncounted) until it finds an edge or
+        // a hole to run off into; if it never does, it pools there
+        if (++flat > 140 || nrm.z < 0.9) { wet(2); sim.pools++; mark(0.08 * wildScale); return; }
+        if (flat === 1) { const a = Math.random() * Math.PI * 2; drift.set(Math.cos(a), Math.sin(a), 0); }
+        drift.applyAxisAngle(rainHit.n.set(0, 0, 1), (Math.random() - 0.5) * 0.5);
+        p.addScaledVector(drift, cell * 0.5);
+        const hf = rainField(p, true);
+        p.addScaledVector(hf.n, cell * 0.35 - hf.d);
+        if (n % 3 === 0) mark(0.08 * wildScale);
+        continue;
+      }
+      if (flat) { flat = 0; back.copy(p); }
+      p.addScaledVector(tan.divideScalar(steep), cell * 0.5);
+      const h2 = rainField(p, true);
+      p.addScaledVector(h2.n, cell * 0.35 - h2.d);   // stay on the surface
+      if (p.z - groundZ < cell) return;              // reached the ground
+      wet(1);
+      if (n % 12 === 11) { if (back.distanceTo(p) < cell * 1.2) { wet(2); sim.pools++; mark(0.08 * wildScale); return; } back.copy(p); }   // stuck in a hollow: a pool
+      if (n % 3 === 0) mark(0.08 * wildScale);
+    }
+    if (!landed) return;
+  }
+}
+// Counts → water against open ground, smoothed over the neighbouring wet cells, into the map.
+function uploadRain(sim) {
+  const f = sim.field, arr = sim.acc, nx = f.nx, ny = f.ny, nz = f.nz, NXY = nx * ny;
+  const scale = (sim.sp * sim.sp) / (f.c * f.c);   // a drop's share of rain, against a cell's face
+  if (!rainTex || rainTex.image.width !== nx || rainTex.image.height !== ny || rainTex.image.depth !== nz) {
+    rainTex?.dispose();
+    rainTex = new THREE.Data3DTexture(new Uint8Array(nx * ny * nz), nx, ny, nz);
+    rainTex.format = THREE.RedFormat; rainTex.minFilter = rainTex.magFilter = THREE.LinearFilter; rainTex.unpackAlignment = 1;
+  }
+  const out = rainTex.image.data, band = f.c * 2.5;
+  out.fill(0);
+  for (let k = 1; k < nz - 1; k++) for (let j = 1; j < ny - 1; j++) for (let i = 1; i < nx - 1; i++) {
+    const at = i + j * nx + k * NXY, sd = f.sd[at];
+    if (sd < 0 || sd > band) continue;   // only the band just off the surface
+    let sum = 0, cnt = 0;
+    for (let dk = -1; dk <= 1; dk++) for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      const q = at + di + dj * nx + dk * NXY, sq = f.sd[q];
+      if (sq < 0 || sq > band) continue;
+      const w = di || dj || dk ? 1 : 2;
+      sum += arr[q] * w; cnt += w;
+    }
+    out[at] = Math.round(255 * Math.min(1, rainLevel((sum / cnt) * scale)));
+  }
+  rainTex.needsUpdate = true;
+  rainUniforms.rainTex.value = rainTex;
+  rainUniforms.rainO.value.set(f.ox, f.oy, f.oz);
+  rainUniforms.rainCell.value = f.c;
+  rainUniforms.rainDims.value.set(nx, ny, nz);
+}
+
+// ---- the replayed drops
+const RAIN_SHOWN = 500;
+const rainGeo = new THREE.BufferGeometry();
+rainGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(RAIN_SHOWN * 3), 3));
+const rainPoints = new THREE.Points(rainGeo, new THREE.PointsMaterial({ color: '#1c5cab', size: 0.007, transparent: true, opacity: 0.85, depthWrite: false }));
+rainPoints.frustumCulled = false;
+rainPoints.visible = false;
+scene.add(rainPoints);
+let rainPlayers = [];
+function rainPointsReset() { rainPlayers = []; rainGeo.setDrawRange(0, 0); }
+function updateRainPoints(dt) {
+  const sim = rainSim;
+  rainPoints.visible = rainOn && rainDropsShown && !!sim && sim.paths.length > 0;
+  if (!rainPoints.visible) return;
+  rainPoints.material.size = 0.007 * wildScale;
+  while (rainPlayers.length < Math.min(RAIN_SHOWN, sim.paths.length * 2)) rainPlayers.push({ path: pickOf(sim.paths), t: -Math.random() * 6 });
+  const pos = rainGeo.attributes.position.array;
+  rainPlayers.forEach((r, i) => {
+    r.t += dt;
+    const path = r.path, end = path[path.length - 1].t;
+    if (r.t > end + 0.6) { r.path = pickOf(sim.paths); r.t = -Math.random() * 2; }
+    let x = 1e6, y = 1e6, z = 1e6;   // waiting: out of sight
+    if (r.t >= 0 && r.t <= end) {
+      let lo = 0, hi = path.length - 1;
+      while (hi - lo > 1) { const m = (lo + hi) >> 1; if (path[m].t <= r.t) lo = m; else hi = m; }
+      const a = path[lo], b = path[hi], f = b.t > a.t ? (r.t - a.t) / (b.t - a.t) : 0;
+      x = a.p.x + (b.p.x - a.p.x) * f; y = a.p.y + (b.p.y - a.p.y) * f; z = a.p.z + (b.p.z - a.p.z) * f;
+    } else if (r.t > end) { const q = path[path.length - 1].p; x = q.x; y = q.y; z = q.z; }   // a moment at rest where it ended
+    pos[i * 3] = x; pos[i * 3 + 1] = y; pos[i * 3 + 2] = z;
+  });
+  rainGeo.setDrawRange(0, rainPlayers.length);
+  rainGeo.attributes.position.needsUpdate = true;
+}
+
+function updateRain(dt) {
+  for (const b of Object.values(blocks)) b.holder.updateMatrixWorld();
+  buildQueuedField();
+  refreshActive();
+  const key = layoutSig + rainWind + rainSlant;
+  const waiting = Object.values(blocks).some((b) => b.holder.visible && b.holder.userData.scale === 1 && b.raw && !fields.has(b.raw));
+  if (rainSim && rainSim.key !== key) { rainSim = null; rainUniforms.rainTex.value = RAIN_EMPTY; rainPointsReset(); }
+  if (settled && !waiting && !rainSim) startRain();
+  const sim = rainSim;
+  if (sim && settled && sim.i < sim.order.length) {
+    const t0 = performance.now();
+    while (sim.i < sim.order.length && performance.now() - t0 < 7) {
+      const k = sim.order[sim.i++];
+      const path = sim.i % sim.pathEvery === 0 && sim.paths.length < 1500 ? [] : null;
+      rainDrop(sim, k, path);
+      if (path && path.length > 2) sim.paths.push(path);
+    }
+    const now = performance.now();
+    if (sim.i >= sim.order.length || now - sim.lastUpload > 900) { uploadRain(sim); sim.lastUpload = now; renderRainPanel(); }
+  }
+  updateRainPoints(dt);
+}
+
+function renderRainPanel() {
+  ctxRain.hidden = !rainOn;
+  btnRain.setAttribute('aria-pressed', rainOn);
+  if (!rainOn) return;
+  ctxRain.querySelectorAll('[data-wind]').forEach((b) => b.setAttribute('aria-pressed', b.dataset.wind === rainWind));
+  rainSlantEl.hidden = document.getElementById('rain-slant-out').hidden = rainWind === 'none';
+  rainSlantEl.value = rainSlant;
+  document.getElementById('rain-slant-out').textContent = `${rainSlant}°`;
+  document.getElementById('rain-drops').checked = rainDropsShown;
+  const sim = rainSim;
+  const pct = sim ? Math.round(100 * sim.i / sim.order.length) : 0;
+  document.getElementById('rain-info').textContent = !sim
+    ? 'Waiting for the cubes…'
+    : pct < 100 ? `Raining… ${pct}% of ${sim.order.length.toLocaleString()} drops`
+    : `${sim.order.length.toLocaleString()} drops, ${rainWind === 'none' ? 'falling straight down' : `blown from the ${{ N: 'north', E: 'east', S: 'south', W: 'west' }[rainWind]}, ${rainSlant}° off vertical`}. They run downhill, spread off flats over edges and into holes, drip off overhangs and pool in hollows.`;
+  applyInsets();
+}
+function setRain(on) {
+  rainOn = on;
+  if (on && expoOn) setExposure(false);   // one heatmap at a time
+  rainOnU.value = on ? 1 : 0;
+  if (!on) { rainPoints.visible = false; }
+  renderRainPanel();
+}
+btnRain.onclick = () => setRain(!rainOn);
+ctxRain.querySelectorAll('[data-wind]').forEach((b) => { b.onclick = () => { rainWind = b.dataset.wind; renderRainPanel(); }; });
+rainSlantEl.oninput = () => { rainSlant = Number(rainSlantEl.value); renderRainPanel(); };
+document.getElementById('rain-drops').onchange = (e) => { rainDropsShown = e.target.checked; };
+{   // the ramp's ticks sit where their values fall on its log scale
+  document.getElementById('rain-ticks').innerHTML = [[0, 'dry'], [1, '1×'], [3, '3×'], [10, '10×'], [RAIN_VMAX, `${RAIN_VMAX}×`]]
+    .map(([v, label]) => `<span style="left:${(rainLevel(v) * 100).toFixed(1)}%">${label}</span>`).join('');
+}
+queueMicrotask(() => setRain(rainOn));
+
 // ---------- rock (T): a coarse, sandy, 3D-printed-stone surface. The texture is generated here
 // (colour in RGB, height in alpha) and projected onto the cubes from three sides (Rhino meshes carry
 // no texture coordinates); the height bends the lighting (bump mapping), so the grains catch the
@@ -4072,7 +4416,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
     shader.uniforms.rockScale = { value: metresPerUnit / ROCK_TILE_M };
     shader.uniforms.rockMetres = { value: metresPerUnit };
     shader.uniforms.rockOrigin = { value: origin };
-    Object.assign(shader.uniforms, expoUniforms);
+    Object.assign(shader.uniforms, expoUniforms, rainUniforms);
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nuniform vec3 rockOrigin;\nvarying vec3 vRockPos;\nvarying vec3 vRockNormal;\nvarying float vRockZ;\nvarying vec3 vExpoW;\nvarying vec3 vExpoN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvRockPos = position - rockOrigin;\nvRockNormal = normal;\nvRockZ = position.z;\nvExpoW = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvExpoN = normalize(mat3(modelMatrix) * objectNormal);');
@@ -4096,7 +4440,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
           vec3 grad = sign(det) * (dHdxy.x * r1 + dHdxy.y * r2);
           return normalize(abs(det) * surfNorm - grad);
         }`)
-      .replace('#include <packing>', `#include <packing>${EXPO_GLSL}`)
+      .replace('#include <packing>', `#include <packing>${EXPO_GLSL}${RAIN_GLSL}`)
       .replace('#include <map_fragment>', `#include <map_fragment>
         float rockH = 0.5;
         if (rockOn > 0.5) {
@@ -4113,6 +4457,7 @@ function rockify(mat, metresPerUnit, origin = new THREE.Vector3()) {
 `)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
         if (expoOn > 0.5) gl_FragColor = vec4(expoColor(), 1.0);
+        else if (rainOn > 0.5) gl_FragColor = vec4(rainColor(), 1.0);
         // inside faces seen through a cut (only where a model isn't closed; elsewhere the section caps
         // cover them): the same flat poché grey as the caps, without light or texture
         if (sectionOn > 0.5 && !gl_FrontFacing) gl_FragColor = vec4(0.361, 0.380, 0.408, 1.0);`)
@@ -4740,6 +5085,7 @@ renderer.setAnimationLoop(() => {
   if (animalsOn) updateCritters(dt);
   if (wildOn) updateWild(dt);
   if (expoOn) updateExposure();
+  if (rainOn) updateRain(dt);
   if (sunOn && sunPlaying) {   // one hour of daylight per second
     sunMinutes += dt * 60;
     if (sunMinutes >= SUN_PLAY[1]) sunMinutes = SUN_PLAY[0];
