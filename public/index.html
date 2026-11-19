@@ -442,6 +442,7 @@
           <button id="btn-section" aria-pressed="false" title="Cut the model with planes along X, Y and Z (X)"><kbd>X</kbd> Section</button>
           <button id="btn-labels" aria-pressed="false" title="Show group labels and text dots (L)"><kbd>L</kbd> Labels</button>
           <button id="btn-negative" aria-pressed="false" title="Show, ghosted, the objects that cut each cube's voids (N)"><kbd>N</kbd> Negative space</button>
+          <button id="btn-tour" data-close aria-pressed="false" title="Fly in and out of the voids; Esc to stop (V)"><kbd>V</kbd> Tour</button>
           <button id="btn-fit" data-close title="Frame the view (F)"><kbd>F</kbd> Fit</button>
         </div>
       </div>
@@ -1274,6 +1275,7 @@ function layout() {
 
 // ---------- camera: glide to frame the view, keeping the direction the viewer chose
 let camGoal = null;
+let fovGoal = 28;   // the lens the camera is heading for (the tour widens it)
 const DEFAULT_DIR = new THREE.Vector3(-0.62, -0.95, 0.85).normalize();
 const MATRIX_DIR = new THREE.Vector3(0, -0.5, 1).normalize();
 // Distance at which all 8 corners of `box` fit in the view (with room for the controls), looking along the current direction.
@@ -1286,8 +1288,8 @@ function frame(box = currentBounds, dir = camGoal?.dir || camera.position.clone(
   let margin = presenting ? 0.85 : camera.aspect < 1 ? 0.7 : 0.6;   // fill more of the screen without controls
   const inset = viewInsets();   // part of the screen taken by the interfaces panel and the bars
   if (inset.right || inset.bottom || inset.top) margin = 0.92;
-  const ty = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * margin * (1 - (inset.bottom + inset.top) / innerHeight);
-  const tx = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2) * margin * camera.aspect * (1 - inset.right / innerWidth);
+  const ty = Math.tan(THREE.MathUtils.degToRad(fovGoal) / 2) * margin * (1 - (inset.bottom + inset.top) / innerHeight);
+  const tx = Math.tan(THREE.MathUtils.degToRad(fovGoal) / 2) * margin * camera.aspect * (1 - inset.right / innerWidth);
   let dist = 0;
   for (let i = 0; i < 8; i++) {
     const v = new THREE.Vector3(i & 1 ? box.max.x : box.min.x, i & 2 ? box.max.y : box.min.y, i & 4 ? box.max.z : box.min.z).sub(c);
@@ -1328,6 +1330,7 @@ sliderOut.textContent = `${explode.toFixed(1)}×`;
 
 let from = null;
 function setView(v, opts = {}) {
+  if (tour) stopTour();
   from = from === null ? null : view;
   view = v;
   document.body.dataset.view = v;
@@ -1612,7 +1615,7 @@ addEventListener('keydown', (e) => {
   else if (k === 't') setRock(!rockOn);
   else if (k === 'x') setSection(!sectionOn);
   else if (k === 'g') setGrid(!gridOn);
-  else if (k === 'escape') { if (menuOpen()) openMenu(null); else if (presenting) setPresenting(false); else hideCard(); }
+  else if (k === 'escape') { if (menuOpen()) openMenu(null); else if (tour) stopTour(); else if (presenting) setPresenting(false); else hideCard(); }
   else if (k === 'h') setHistoryShown(!historyShown);
   else if (k === 'p') setPresenting(!presenting);
   else if (k === 'm') openManage();
@@ -1620,11 +1623,12 @@ addEventListener('keydown', (e) => {
   else if (k === 'c') nextMode();
   else if (k === 'l') btnLabels.click();
   else if (k === 'n') setNegative(!negativeOn);
+  else if (k === 'v') startTour();
   else if (k === 'f') frame();
   else if (k === 'u') poll(true);
 });
 // Steering by hand stops the camera glide and pauses the orbit for 20 s.
-controls.addEventListener('start', () => { camGoal = null; controls.autoRotate = false; clearTimeout(resumeTimer); });
+controls.addEventListener('start', () => { if (tour) stopTour(); camGoal = null; controls.autoRotate = false; clearTimeout(resumeTimer); });
 controls.addEventListener('end', () => { resumeTimer = setTimeout(() => { controls.autoRotate = rotateWanted && view !== 'matrix'; }, 20000); });
 
 // ---------- timeline: every update as a dot in its group's row; click or drag to go back in time
@@ -3362,6 +3366,298 @@ manageAuth.onsubmit = (e) => {
 document.getElementById('btn-manage').onclick = openManage;
 document.getElementById('manage-close').onclick = () => manageEl.close();
 
+// ---------- tour (V): the camera flies in and out of the voids
+// When it starts, the cubes in view are mapped into a grid of small cells, solid or open, from the
+// meshes themselves (so it needs no published negative space): each column of cells is filled
+// between the surfaces it crosses. The most spacious open cells inside the cubes become the stops,
+// and a path that keeps as far from the walls as it can joins them, leaving one void and flying
+// into the next where they don't connect inside. The camera follows it with a wide lens, looking
+// ahead and slowing down where it's tight. Esc, V, dragging or another view stops it.
+const TOUR_CELLS = 72;      // cells along the longest side of the cubes in view
+const TOUR_MARGIN = 14;     // cells of open air around them, to fly out and back in
+const TOUR_STOPS = 8;       // at most this many voids visited
+const TOUR_FOV = 62;        // degrees: a wide lens inside the voids
+const BASE_FOV = camera.fov;
+let tour = null;
+const btnTour = document.getElementById('btn-tour');
+
+class MinHeap {   // keys with priorities, smallest first
+  constructor() { this.k = []; this.p = []; }
+  get size() { return this.k.length; }
+  push(key, pri) {
+    const k = this.k, p = this.p;
+    let i = k.length;
+    k.push(key); p.push(pri);
+    while (i > 0) {
+      const up = (i - 1) >> 1;
+      if (p[up] <= pri) break;
+      k[i] = k[up]; p[i] = p[up]; i = up;
+    }
+    k[i] = key; p[i] = pri;
+  }
+  pop() {
+    const k = this.k, p = this.p, top = k[0], lastK = k.pop(), lastP = p.pop();
+    if (k.length) {
+      let i = 0;
+      for (;;) {
+        let c = 2 * i + 1;
+        if (c >= k.length) break;
+        if (c + 1 < k.length && p[c + 1] < p[c]) c++;
+        if (p[c] >= lastP) break;
+        k[i] = k[c]; p[i] = p[c]; i = c;
+      }
+      k[i] = lastK; p[i] = lastP;
+    }
+    return top;
+  }
+}
+
+// The grid of what's in view, where every cube is going in this view (so it can start mid-glide).
+function mapSpace() {
+  scene.updateMatrixWorld(true);
+  const parts = [], blockBoxes = [];
+  const q = new THREE.Quaternion();
+  for (const b of Object.values(blocks)) {
+    const u = b.holder.userData;
+    if (!b.raw || !(u.scale > 0) || !b.box || b.box.isEmpty()) continue;
+    const hm = new THREE.Matrix4().compose(u.target, q, new THREE.Vector3().setScalar(u.scale));
+    const own = new THREE.Box3();
+    b.raw.traverse((o) => {
+      if (!o.isMesh) return;
+      const m = hm.clone().multiply(b.raw.matrix).multiply(o.matrix);
+      o.geometry.computeBoundingBox();
+      own.union(o.geometry.boundingBox.clone().applyMatrix4(m));
+      parts.push([o.geometry, m]);
+    });
+    if (!own.isEmpty()) blockBoxes.push(own);
+  }
+  if (!parts.length) return null;
+  const inner = new THREE.Box3();
+  for (const bb of blockBoxes) inner.union(bb);
+  const size = inner.getSize(new THREE.Vector3());
+  const span = Math.max(size.x, size.y, size.z), h = span / TOUR_CELLS;
+  const box = inner.clone().expandByScalar(h * TOUR_MARGIN);
+  const nx = Math.ceil((box.max.x - box.min.x) / h), ny = Math.ceil((box.max.y - box.min.y) / h), nz = Math.ceil((box.max.z - box.min.z) / h);
+  const nxy = nx * ny, N = nxy * nz;
+  const solid = new Uint8Array(N);
+  for (let k = 0; k < nz; k++) if (box.min.z + (k + 0.5) * h < inner.min.z) solid.fill(1, k * nxy, (k + 1) * nxy);   // never under the ground
+  const A = new THREE.Vector3(), B = new THREE.Vector3(), C = new THREE.Vector3();
+  for (const [g, m] of parts) {
+    const pos = g.attributes.position, index = g.index;
+    const n = index ? index.count : pos.count, at = (t) => (index ? index.getX(t) : t);
+    const hits = new Map();   // column -> heights where this mesh's surface crosses its centre line
+    for (let t = 0; t + 2 < n; t += 3) {
+      A.fromBufferAttribute(pos, at(t)).applyMatrix4(m);
+      B.fromBufferAttribute(pos, at(t + 1)).applyMatrix4(m);
+      C.fromBufferAttribute(pos, at(t + 2)).applyMatrix4(m);
+      const d = (B.y - C.y) * (A.x - C.x) + (C.x - B.x) * (A.y - C.y);
+      if (Math.abs(d) < 1e-18) continue;   // seen edge-on from above: the faces around it do the work
+      const i0 = Math.max(0, Math.ceil((Math.min(A.x, B.x, C.x) - box.min.x) / h - 0.5));
+      const i1 = Math.min(nx - 1, Math.floor((Math.max(A.x, B.x, C.x) - box.min.x) / h - 0.5));
+      const j0 = Math.max(0, Math.ceil((Math.min(A.y, B.y, C.y) - box.min.y) / h - 0.5));
+      const j1 = Math.min(ny - 1, Math.floor((Math.max(A.y, B.y, C.y) - box.min.y) / h - 0.5));
+      for (let j = j0; j <= j1; j++) {
+        const y = box.min.y + (j + 0.5) * h;
+        for (let i = i0; i <= i1; i++) {
+          const x = box.min.x + (i + 0.5) * h;
+          const w1 = ((B.y - C.y) * (x - C.x) + (C.x - B.x) * (y - C.y)) / d;
+          const w2 = ((C.y - A.y) * (x - C.x) + (A.x - C.x) * (y - C.y)) / d;
+          const w3 = 1 - w1 - w2;
+          if (w1 < 0 || w2 < 0 || w3 < 0) continue;
+          const col = i + nx * j;
+          let list = hits.get(col);
+          if (!list) hits.set(col, (list = []));
+          list.push(w1 * A.z + w2 * B.z + w3 * C.z);
+        }
+      }
+    }
+    for (const [col, zs] of hits) {
+      zs.sort((a, b) => a - b);
+      const u = [];   // a centre line through a shared edge meets both faces: count it once
+      for (const z of zs) if (!u.length || z - u[u.length - 1] > h * 1e-3) u.push(z);
+      const cell = (z) => Math.min(nz - 1, Math.max(0, Math.floor((z - box.min.z) / h)));
+      for (let a = 0; a + 1 < u.length; a += 2) for (let k = cell(u[a]); k <= cell(u[a + 1]); k++) solid[col + nxy * k] = 1;
+      if (u.length % 2) solid[col + nxy * cell(u[u.length - 1])] = 1;   // an open shell: at least its surface
+    }
+  }
+  // clearance: how many cells to the nearest solid one (0 = solid), and what can be reached from outside
+  const clear = new Uint8Array(N).fill(255), queue = new Int32Array(N);
+  let head = 0, tail = 0;
+  for (let c = 0; c < N; c++) if (solid[c]) { clear[c] = 0; queue[tail++] = c; }
+  const steps6 = [1, -1, nx, -nx, nxy, -nxy];
+  const inGrid6 = (c, s) => {
+    const i = c % nx, j = ((c / nx) | 0) % ny, k = (c / nxy) | 0;
+    return s === 0 ? i < nx - 1 : s === 1 ? i > 0 : s === 2 ? j < ny - 1 : s === 3 ? j > 0 : s === 4 ? k < nz - 1 : k > 0;
+  };
+  while (head < tail) {
+    const c = queue[head++], d = clear[c] + 1;
+    for (let s = 0; s < 6; s++) {
+      if (!inGrid6(c, s)) continue;
+      const n2 = c + steps6[s];
+      if (clear[n2] > d) { clear[n2] = Math.min(d, 254); queue[tail++] = n2; }
+    }
+  }
+  const reach = new Uint8Array(N);
+  head = tail = 0;
+  const topCorner = (nz - 1) * nxy;   // the air above everything
+  reach[topCorner] = 1; queue[tail++] = topCorner;
+  while (head < tail) {
+    const c = queue[head++];
+    for (let s = 0; s < 6; s++) {
+      if (!inGrid6(c, s)) continue;
+      const n2 = c + steps6[s];
+      if (!reach[n2] && !solid[n2]) { reach[n2] = 1; queue[tail++] = n2; }
+    }
+  }
+  const centre = (c, v = new THREE.Vector3()) =>
+    v.set(box.min.x + ((c % nx) + 0.5) * h, box.min.y + ((((c / nx) | 0) % ny) + 0.5) * h, box.min.z + (((c / nxy) | 0) + 0.5) * h);
+  const cellAt = (p) => {
+    const i = Math.floor((p.x - box.min.x) / h), j = Math.floor((p.y - box.min.y) / h), k = Math.floor((p.z - box.min.z) / h);
+    return i < 0 || j < 0 || k < 0 || i >= nx || j >= ny || k >= nz ? -1 : i + nx * j + nxy * k;
+  };
+  return { box, inner, blockBoxes, h, span, nx, ny, nz, nxy, N, solid, clear, reach, centre, cellAt };
+}
+
+// The cheapest way from one open cell to another, preferring room around (26 neighbours, A*).
+function findWay(map, from, to) {
+  const { nx, ny, nz, nxy, N, clear, reach, centre } = map;
+  const g = new Float32Array(N).fill(Infinity), prev = new Int32Array(N).fill(-1), done = new Uint8Array(N);
+  const goal = centre(to), p = new THREE.Vector3();
+  const heap = new MinHeap();
+  g[from] = 0; heap.push(from, 0);
+  while (heap.size) {
+    const c = heap.pop();
+    if (c === to) break;
+    if (done[c]) continue;
+    done[c] = 1;
+    const i = c % nx, j = ((c / nx) | 0) % ny, k = (c / nxy) | 0;
+    for (let dk = -1; dk <= 1; dk++) for (let dj = -1; dj <= 1; dj++) for (let di = -1; di <= 1; di++) {
+      if (!di && !dj && !dk) continue;
+      const a = i + di, b = j + dj, e = k + dk;
+      if (a < 0 || b < 0 || e < 0 || a >= nx || b >= ny || e >= nz) continue;
+      const n2 = a + nx * b + nxy * e;
+      if (!reach[n2] || done[n2]) continue;
+      const cl = clear[n2];
+      const cost = g[c] + Math.hypot(di, dj, dk) * (1 + 14 / (cl * cl));
+      if (cost < g[n2]) { g[n2] = cost; prev[n2] = c; heap.push(n2, cost + centre(n2, p).distanceTo(goal) / map.h); }
+    }
+  }
+  if (prev[to] < 0 && from !== to) return null;
+  const cells = [];
+  for (let c = to; c >= 0; c = c === from ? -1 : prev[c]) cells.push(c);
+  return cells.reverse();
+}
+
+function planTour() {
+  const map = mapSpace();
+  if (!map) return null;
+  const { N, clear, reach, centre, blockBoxes, h } = map;
+  // the stops: the most spacious open cells inside the cubes, well apart
+  const p = new THREE.Vector3(), cands = [];
+  for (let c = 0; c < N; c++) {
+    if (!reach[c] || clear[c] < 2) continue;
+    centre(c, p);
+    if (blockBoxes.some((bb) => bb.containsPoint(p))) cands.push(c);
+  }
+  cands.sort((a, b) => clear[b] - clear[a]);
+  const stops = [];
+  for (const c of cands) {
+    if (stops.length >= TOUR_STOPS) break;
+    const at = centre(c);
+    const apart = Math.max(clear[c] * 2.5, TOUR_CELLS / 6) * h;
+    if (stops.every((s) => s.at.distanceTo(at) > apart)) stops.push({ c, at });
+  }
+  if (!stops.length) return null;
+  // the way in: the open cell outside nearest the camera
+  let start = -1, best = Infinity;
+  const q = new THREE.Vector3();
+  for (let c = 0; c < N; c += 1) {
+    if (!reach[c] || clear[c] < 3) continue;
+    centre(c, q);
+    if (map.inner.containsPoint(q)) continue;
+    const d = q.distanceToSquared(camera.position);
+    if (d < best) { best = d; start = c; }
+  }
+  if (start < 0) return null;
+  // visit the nearest stop next, every time, and come back out where it went in
+  const order = [], left = [...stops];
+  let here = centre(start);
+  while (left.length) {
+    left.sort((a, b) => a.at.distanceTo(here) - b.at.distanceTo(here));
+    const s = left.shift();
+    order.push(s);
+    here = s.at;
+  }
+  const points = [camera.position.clone()];
+  let from = start, visited = 0;
+  for (const s of [...order, { c: start }]) {
+    const way = findWay(map, from, s.c);
+    if (!way) continue;   // shut in: can't be reached without flying through a wall
+    if (s.at) visited++;
+    way.forEach((c, i) => { if (i % 3 === 0 || i === way.length - 1) points.push(centre(c)); });
+    from = s.c;
+  }
+  if (!visited || points.length < 3) return null;
+  const curve = new THREE.CatmullRomCurve3(points, false, 'centripetal');
+  curve.arcLengthDivisions = points.length * 24;
+  return { map, curve, length: curve.getLength(), visited };
+}
+
+function startTour() {
+  if (tour) return stopTour();
+  if (view === 'matrix' || view === 'interfaces') setView('combined');
+  statusNote = { text: 'Mapping the voids…', until: Date.now() + 15000 };
+  renderStatus();
+  setTimeout(() => {   // let the message show first: mapping takes a moment
+    const plan = planTour();
+    if (!plan) {
+      statusNote = { text: 'No voids open to the outside and big enough to fly into.', until: Date.now() + 6000 };
+      renderStatus();
+      return;
+    }
+    camGoal = null;
+    controls.autoRotate = false;
+    tour = { ...plan, s: 0, started: performance.now(), look: plan.curve.getPointAt(Math.min(1, plan.map.span * 0.2 / plan.length)),
+      dirBefore: camera.position.clone().sub(controls.target).normalize() };
+    fovGoal = TOUR_FOV;
+    btnTour.setAttribute('aria-pressed', 'true');
+    statusNote = { text: `Touring ${plan.visited} void${plan.visited === 1 ? '' : 's'}. Esc to stop.`, until: Date.now() + 1e9 };
+    renderStatus();
+  }, 30);
+}
+function stopTour() {
+  if (!tour) return;
+  const dir = tour.dirBefore;
+  tour = null;
+  fovGoal = BASE_FOV;
+  btnTour.setAttribute('aria-pressed', 'false');
+  statusNote = null;
+  renderStatus();
+  controls.autoRotate = rotateWanted && view !== 'matrix';
+  frame(currentBounds, dir);   // glide back out to the overview
+}
+function updateTour(dt) {
+  const t = tour, map = t.map;
+  // fast in the open, slower where it's tight, easing in and out
+  const c = map.cellAt(camera.position);
+  const outside = map.inner.distanceToPoint(camera.position);
+  const room = c < 0 ? 40 : map.clear[c];
+  const pace = outside > 0 ? 1.4 + outside / (map.span * 0.2) : THREE.MathUtils.clamp(0.3 + room / 12, 0.3, 1.4);
+  const ease = Math.min(1, (performance.now() - t.started) / 1500, 0.2 + (t.length - t.s) / (map.span * 0.3));
+  t.s = Math.min(t.length, t.s + map.span * 0.2 * pace * Math.max(0.12, ease) * dt);
+  camera.position.copy(t.curve.getPointAt(t.s / t.length));
+  // look ahead along the way; outside the cubes, turn towards them (more the farther out), so the
+  // approach and the flights between voids keep the model in view
+  const ahead = t.curve.getPointAt(Math.min(1, (t.s + map.span * 0.2) / t.length));
+  const toModel = THREE.MathUtils.clamp(outside / (map.span * 0.15), 0, 0.85);
+  if (toModel > 0) ahead.lerp(map.inner.getCenter(new THREE.Vector3()), toModel);
+  if (ahead.distanceToSquared(camera.position) > 1e-12) t.look.lerp(ahead, 1 - Math.exp(-dt * 4));
+  camera.lookAt(t.look);
+  controls.target.copy(t.look);
+  if (t.s >= t.length) stopTour();
+}
+btnTour.onclick = startTour;
+
 // ---------- animation
 function snapCamera() {
   if (!camGoal) return;
@@ -3394,7 +3690,9 @@ renderer.setAnimationLoop(() => {
   dashMat.opacity = THREE.MathUtils.lerp(dashMat.opacity, tileGoal * 0.9, a);
   decor.visible = matrixFade > 0.01;
 
-  if (camGoal) {
+  if (Math.abs(camera.fov - fovGoal) > 0.01) camera.fov = THREE.MathUtils.lerp(camera.fov, fovGoal, 1 - Math.exp(-dt * 3));
+  if (tour) updateTour(dt);
+  else if (camGoal) {
     const t = 1 - Math.exp(-dt * 4);
     const offset = camera.position.clone().sub(controls.target);
     const len = THREE.MathUtils.lerp(offset.length(), camGoal.dist, t);
@@ -3404,9 +3702,10 @@ renderer.setAnimationLoop(() => {
     if (controls.target.distanceTo(camGoal.target) < camGoal.dist * 1e-3 && Math.abs(len - camGoal.dist) < camGoal.dist * 1e-3 &&
         dir.angleTo(camGoal.dir) < 1e-3) camGoal = null;
   }
-  const d = camera.position.distanceTo(controls.target);
-  camera.near = d / 100; camera.far = d * 30; camera.updateProjectionMatrix();
-  controls.update();
+  if (tour) { camera.near = tour.map.h * 0.25; camera.far = tour.map.span * 60; }   // close to the walls, and the whole model
+  else { const d = camera.position.distanceTo(controls.target); camera.near = d / 100; camera.far = d * 30; }
+  camera.updateProjectionMatrix();
+  if (!tour) controls.update();
   sizeDots();
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);

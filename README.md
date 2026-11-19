@@ -86,6 +86,7 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 | **Esc** | Close the cube's card |
 | **L** | Group labels and text dots |
 | **N** | Negative space: the objects that cut the voids, very ghosted |
+| **V** | Tour: fly in and out of the voids (Esc to stop) |
 | **F** | Fit the view |
 | **P** | Fullscreen with only the model (Esc to come back) |
 | **H** | Show or hide the timeline |
@@ -95,6 +96,8 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 **Click a cube** for its card: size, volume, void (share of its bounding box left empty), estimated weight in concrete (2.4 t/m³), surface area, which cubes it touches and over how much area, triangle count and file size, plus buttons for One by one and Interfaces. The card also **downloads the published .3dm files**: this version, all versions of the group (zip), or every group as shown (zip; when you're looking back on the timeline, the versions of that moment). These are the files the Publish button sent, so meshes in metres, not the students' working files. Volume needs a closed model; otherwise the card says so. Clicking empty space or **Esc** closes it.
 
 **Text dots** that a group published with its cube (the **TextDots** option) float on it like Rhino's own dots: dark tags (in the dot's own colour with model colours), always on top and the same size on screen in every view. They move with the cube, are cut away by a section, and **L** hides them together with the group labels.
+
+**Tour** (V, in the Display menu) flies the camera in and out of the cubes' voids, with a wide lens, looking ahead: in through an opening, through the void, out again and into the next. It works from the models themselves, so it needs no published negative space: the cubes in view are mapped into a grid of cells about 1/72 of their size, the most spacious places inside them become the stops (up to 8), and the route keeps as far from the walls as it can, slowing down where it's tight. Voids closed off from the outside are skipped. In One by one it tours that group's cube, in Combined all of them (Matrix and Interfaces switch to Combined first). Esc, V or dragging stops it; at the end it glides back to the overview. Mapping takes a moment with large models. Good in fullscreen (P).
 
 **Negative space** (N, in the Display menu) shows the objects a group published as its negative space (the **NegativeSpace** option): the shapes that cut the cube's voids, very ghosted, where they were in Rhino. Every separate void (each connected piece, also when one object holds several) has its own colour, with edges in a darker shade of it; the colours look random but are the same on every screen and every reload, and steer clear of the group's own colour. Objects that had a name in Rhino show it as a text dot in their centre, in a pale tint of their void's colour; these names show with the labels (**L**), also while the negative space itself is hidden, and with the negative space (**N**). In **One by one**, the card lists every void of the group: its colour, name (or *Void 1*, *Void 2*, …), size and volume (closed shapes only). They're never part of the cube: size, volume, voids, interfaces, sections, the grid and clicking only count the cube itself. Off when the page opens (`?negative=1` starts with it on).
 
