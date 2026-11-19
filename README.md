@@ -7,7 +7,7 @@ Each group designs one piece (a cube) in Rhino and presses **Publish**. The clas
 - **Combined**: all pieces together at their real Rhino coordinates (e.g. eight cubes forming one 2×2×2 cube); the **Separation** slider pushes every piece away from the centre, with its label on top once they're apart
 - **Interfaces**: a group's cube with the cubes it touches, pulled apart, with each shared face drawn in the gap; click a face to see in 2D where the cubes touch and where their voids connect, with the areas
 
-Every publish is kept, so the **timeline** can step back through the session, version by version, or replay it. **Sun** (S) lights the model with the real sun for any date and time in Tainan, with long shadows, the sun's path and a compass. **Animals** (A) brings the structure to life with chibi Taiwanese wildlife.
+Every publish is kept, so the **timeline** can step back through the session, version by version, or replay it. **Sun** (S) lights the model with the real sun for any date and time in Tainan, with long shadows, the sun's path and a compass. **Animals** (A) brings the structure to life with chibi Taiwanese wildlife; **Wildlife** (W) fills the voids with the real residents of Tainan's stone: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel.
 
 ```
 Rhino (each group)                 Vercel                          Class screen (browser)
@@ -78,6 +78,7 @@ In the bottom right, the **Display**, **Environment** and **Manage** menus hold 
 | **[** **]** | Previous / next update on the timeline |
 | **S** | Sun on/off |
 | **A** | Animals on/off |
+| **W** | Wildlife on/off |
 | **R** | Slow orbit on/off (dragging pauses it for 20 s; the matrix never orbits) |
 | **C** | Colours: group colours / model colours / white model |
 | **T** | Rock: show the cubes in stone |
@@ -113,6 +114,8 @@ The address keeps the current view, so you can bookmark one: `…/#matrix`, `…
 **Sun.** Date and time sliders set the sun for Tainan (latitude 22.99°, longitude 120.21°, UTC+8); ▶ plays the day from 5:00 to 19:30. The model's +Y is taken as north. The orange arc is the sun's path that day, the grey ring the horizon.
 
 **Animals.** Eight little residents: Formosan black bears, leopard cats (石虎), a Formosan rock macaque, a pangolin and Taiwan blue magpies. They find places to stand on the cubes (tops, and cave floors with enough headroom), hop between them, fly and perch (the magpies), turn round to look at you, and now and then say something. They ride along when the cubes move between views and move house when a cube is covered, hidden or replaced by a new version. Click one and it jumps and tells you its name. `?animals=1` starts with them on.
+
+**Wildlife.** 26 animals at about their real size (the small insects a little larger, so you can spot them): a golden birdwing (黃裳鳳蝶), common bluebottles (青鳳蝶), carpenter bees (木蜂), leafcutter bees (切葉蜂), dragonflies (蜻蜓) and damselflies (豆娘), light-vented bulbuls (白頭翁), a flock of Japanese white-eyes (綠繡眼), a Taiwan barbet (五色鳥), a black-naped monarch (黑枕藍鶲), a Pacific reef heron (岩鷺), Swinhoe's tree lizards (斯文豪氏攀蜥), insectivorous bats (食蟲蝙蝠) and a red-bellied tree squirrel (赤腹松鼠). They don't hop: every trip is planned through the voids and travelled along a smooth curve, speeding up and slowing down. To do that, each cube is turned into a distance field (how far every point is from the stone), and the way is searched on it, keeping to the middle of the tunnels and preferring the inside of the cubes to the air around them. Butterflies drift on from place to place; bees and dragonflies hover, then dart; the birds fly and perch on tops and cave floors, the white-eyes as a flock; the bats roost upside down on the ceilings of the caves; the leafcutter bees carry leaves into holes in the walls; the lizards and the squirrel run over every surface, up the walls and through the caves; the heron stalks the tops and the ground, and flies when it can't walk there. In Combined they fly from one cube's voids into the next. They ride along when the cubes move, find a new way when the cubes settle in another view, and move house when a cube is hidden or replaced. Click one for its name. `?wildlife=1` starts with them on; Animals and Wildlife can be on together.
 
 **Interfaces.** The 3D view shows the selected group's cube and the cubes it touches (three each in a 2×2×2 cube), pulled apart. In each gap floats a drawing of the shared face, so you can see at a glance where voids run on into the neighbour. Click a face (in 3D, or its tab in the panel; clicking a neighbouring cube moves the focus to it) to open it in the panel. The drawing is the face as seen from the neighbour, with four kinds of area:
 

@@ -450,6 +450,7 @@
         <div class="menu" id="menu-env" role="group" aria-label="Environment" hidden>
           <button id="btn-sun" aria-pressed="false" title="Sunlight for a date and time (S)"><kbd>S</kbd> Sun</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
+          <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
         </div>
       </div>
       <div class="dd">
@@ -1545,9 +1546,9 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     const sheetHit = raycaster.intersectObjects(faceGroup.children.filter((o) => o.isMesh), false)[0];
     if (sheetHit) { faceSel = sheetHit.object.userData.face; renderInterfaces(); return; }
   }
-  if (animalsOn) {   // poking an animal makes it jump and say who it is
+  if (animalsOn || wildOn) {   // poking an animal makes it say who it is (the chibi ones jump too)
     const bodies = [];
-    for (const c of critters) if (c.root.visible) c.root.traverse((o) => { if (o.isMesh && o.userData.critter) bodies.push(o); });
+    for (const c of [...(animalsOn ? critters : []), ...(wildOn ? wild : [])]) if (c.root.visible) c.root.traverse((o) => { if (o.isMesh && o.userData.critter) bodies.push(o); });
     const poked = raycaster.intersectObjects(bodies, false)[0];
     if (poked) { poked.object.userData.critter.poke(); return; }
   }
@@ -1609,6 +1610,7 @@ addEventListener('keydown', (e) => {
   else if (k === ']') stepHistory(1);
   else if (k === 's') setSun(!sunOn);
   else if (k === 'a') setAnimals(!animalsOn);
+  else if (k === 'w') setWild(!wildOn);
   else if (k === 't') setRock(!rockOn);
   else if (k === 'x') setSection(!sectionOn);
   else if (k === 'g') setGrid(!gridOn);
@@ -2687,6 +2689,1104 @@ function setAnimals(on) {
 btnAnimals.onclick = () => setAnimals(!animalsOn);
 setAnimals(animalsOn);
 
+// ---------- wildlife (W): the animals that live in and around Tainan's stone, at about their real
+// size, moving through the voids. Each cube is turned into a distance field (how far every point is
+// from the stone: voxels filled by counting crossings, then a distance transform), and every trip is
+// planned through it (A* on a small lattice that prefers the inside of the cubes and the middle of
+// the tunnels), then smoothed into a curve and travelled with easing, so nothing jumps. Flyers
+// cruise, hover and perch on floors, walls and (bats) ceilings; the lizard and the squirrel run
+// over every surface; the heron walks the tops and the ground. Paths ride with the cube they lead
+// to, and are planned again when the cubes settle in a new view.
+const btnWild = document.getElementById('btn-wildlife');
+let wildOn = params.get('wildlife') === '1';
+const wildLayer = new THREE.Group();
+scene.add(wildLayer);
+const wild = [];
+const glassMats = {};
+const glassMat = (c, o) => (glassMats[c + o] ||= new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: o, side: THREE.DoubleSide, depthWrite: false }));
+function glass(parent, color, opacity, pos, scale, rot = null) {
+  const m = new THREE.Mesh(SPH, glassMat(color, opacity));
+  m.position.set(...pos);
+  m.scale.set(...scale);
+  if (rot) m.rotation.set(...rot);
+  m.renderOrder = 6;
+  parent.add(m);
+  return m;
+}
+// small, natural eyes: dark with a highlight (no blush: these are the real thing)
+function eyes(head, y, z, spread, r, ring = null) {
+  for (const s of [-1, 1]) {
+    if (ring) blob(head, '', [s * spread, y - r * 0.15, z], [r * 1.6, r * 0.6, r * 1.6], { outline: false, mat: flatMat(ring) });
+    blob(head, '', [s * spread, y, z], [r, r * 0.7, r], { outline: false, mat: flatMat('#16181c') });
+    blob(head, '', [s * spread + r * 0.25, y + r * 0.45, z + r * 0.35], [r * 0.32, r * 0.25, r * 0.32], { outline: false, mat: flatMat('#ffffff') });
+  }
+}
+const group = (parent, pos) => { const g = new THREE.Group(); g.position.set(...pos); parent.add(g); return g; };
+
+// Builders: facing +Y, Z up, 1 unit = the species' length (wingspan for butterflies and bats),
+// feet (or the perching point) at the origin.
+function butterfly(a, { body, abdomen, fore, hind, foreMarks, hindMarks }) {
+  blob(a, body, [0, 0.04, 0.06], [0.03, 0.065, 0.03]);
+  blob(a, abdomen, [0, -0.09, 0.055], [0.024, 0.11, 0.024]);
+  const head = group(a, [0, 0.12, 0.065]);
+  blob(head, body, [0, 0, 0], [0.026, 0.026, 0.026]);
+  eyes(head, 0.012, 0.008, 0.016, 0.009);
+  for (const s of [-1, 1]) blob(head, body, [s * 0.03, 0.08, 0.04], [0.004, 0.09, 0.004], { rot: [0.5, 0, -s * 0.35], outline: false });
+  const wings = [];
+  for (const s of [-1, 1]) {
+    const w = group(a, [s * 0.02, 0.04, 0.075]);
+    blob(w, fore, [s * 0.2, 0.06, 0], [0.21, 0.095, 0.008], { rot: [0, 0, s * 0.4] });
+    blob(w, hind, [s * 0.14, -0.1, -0.002], [0.13, 0.12, 0.008], { rot: [0, 0, -s * 0.35] });
+    foreMarks?.(w, s);
+    hindMarks?.(w, s);
+    wings.push(w);
+  }
+  return { head, wings };
+}
+function bee(a, { fur, abdomen, wing, bands = null, face = null }) {
+  blob(a, fur, [0, 0.06, 0.3], [0.19, 0.19, 0.18]);
+  blob(a, abdomen, [0, -0.24, 0.26], [0.18, 0.28, 0.16], { rot: [0.25, 0, 0] });
+  if (bands) for (const y of [-0.14, -0.26, -0.37]) blob(a, bands, [0, y, 0.27 + y * 0.12], [0.165, 0.025, 0.15], { outline: false, rot: [0.25, 0, 0] });
+  const head = group(a, [0, 0.28, 0.3]);
+  blob(head, fur, [0, 0, 0], [0.14, 0.11, 0.14]);
+  if (face) blob(head, face, [0, 0.08, -0.03], [0.08, 0.04, 0.07], { outline: false });
+  for (const s of [-1, 1]) blob(head, '', [s * 0.1, 0.04, 0.02], [0.04, 0.05, 0.08], { outline: false, mat: flatMat('#22201e') });
+  for (const s of [-1, 1]) blob(head, fur, [s * 0.06, 0.16, 0.12], [0.012, 0.012, 0.12], { rot: [-0.9, 0, -s * 0.4], outline: false });
+  for (const y of [0.14, 0.05, -0.04]) for (const s of [-1, 1]) blob(a, fur, [s * 0.15, y, 0.1], [0.025, 0.025, 0.12], { rot: [0, s * 0.6, 0], outline: false });
+  const wings = [];
+  for (const s of [-1, 1]) {
+    const w = group(a, [s * 0.07, 0.04, 0.46]);
+    glass(w, wing, 0.5, [s * 0.24, -0.06, 0], [0.26, 0.085, 0.01], [0, 0, -s * 0.2]);
+    glass(w, wing, 0.45, [s * 0.17, -0.17, -0.01], [0.17, 0.06, 0.01], [0, 0, -s * 0.35]);
+    wings.push(w);
+  }
+  return { head, wings };
+}
+function odonate(a, { thorax, abdomen, tip, eye, wing, slim = 1 }) {
+  blob(a, thorax, [0, 0.27, 0.12], [0.055 * slim, 0.09, 0.065 * slim]);
+  const tail = group(a, [0, 0.19, 0.12]);
+  blob(tail, abdomen, [0, -0.29, 0], [0.032 * slim, 0.3, 0.03 * slim]);
+  if (tip) blob(tail, tip, [0, -0.52, 0], [0.034 * slim, 0.07, 0.032 * slim], { outline: false });
+  for (let i = 1; i < 6; i++) blob(tail, '#1e232a', [0, -0.08 * i - 0.05, 0.002], [0.034 * slim, 0.006, 0.032 * slim], { outline: false });
+  const head = group(a, [0, 0.38, 0.13]);
+  for (const s of [-1, 1]) blob(head, eye, [s * 0.04 * slim, 0, 0.01], [0.05 * slim, 0.05, 0.05 * slim]);
+  blob(head, '', [0.02, 0.03, 0.05], [0.012, 0.01, 0.012], { outline: false, mat: flatMat('#ffffff') });
+  for (const y of [0.3, 0.25]) for (const s of [-1, 1]) blob(a, '#1e232a', [s * 0.05, y, 0.06], [0.008, 0.008, 0.06], { rot: [0, s * 0.5, 0], outline: false });
+  const wings = [];
+  for (const [y, k] of [[0.3, 1], [0.24, 1.15]]) for (const s of [-1, 1]) {
+    const w = group(a, [s * 0.03, y, 0.17]);
+    glass(w, wing, 0.4, [s * 0.25, 0, 0], [0.25, 0.042 * k, 0.004]);
+    blob(w, '', [s * 0.44, 0.012, 0.003], [0.02, 0.009, 0.004], { outline: false, mat: flatMat('#3a2a22') });
+    w.userData.side = s;
+    wings.push(w);
+  }
+  return { head, wings, tail };
+}
+// Small birds. `marks(head, a)` paints the species on.
+function bird(a, { back, belly, head: hc, wing, tail: tc, bill, legs: lc = '#5b5348', tailLen = 0.22, billLen = 0.07, billW = 0.035, marks }) {
+  const legs = group(a, [0, 0.03, 0.17]);
+  for (const s of [-1, 1]) {
+    blob(legs, lc, [s * 0.05, 0, -0.08], [0.016, 0.016, 0.09], { outline: false });
+    blob(legs, lc, [s * 0.05, 0.03, -0.165], [0.02, 0.05, 0.012], { outline: false });
+  }
+  blob(a, back, [0, -0.01, 0.32], [0.16, 0.25, 0.16], { rot: [0.3, 0, 0] });
+  blob(a, belly, [0, 0.04, 0.27], [0.13, 0.19, 0.12], { rot: [0.3, 0, 0], outline: false });
+  const tail = group(a, [0, -0.2, 0.27]);
+  blob(tail, tc, [0, -tailLen * 0.55, -0.02], [0.065, tailLen * 0.62, 0.02], { rot: [0.25, 0, 0] });
+  const head = group(a, [0, 0.21, 0.47]);
+  blob(head, hc, [0, 0, 0], [0.12, 0.12, 0.115]);
+  blob(head, bill, [0, 0.1 + billLen * 0.5, -0.02], [billW, billLen, billW * 0.8], { geo: CONE });
+  const wings = [];
+  for (const s of [-1, 1]) {
+    const w = group(a, [s * 0.13, 0.07, 0.38]);
+    blob(w, wing, [s * 0.21, -0.03, 0], [0.22, 0.1, 0.022]);
+    blob(w, wing, [s * 0.4, -0.07, 0], [0.1, 0.07, 0.018], { rot: [0, 0, -s * 0.4] });
+    wings.push(w);
+  }
+  marks?.(head, a, wings);
+  return { head, wings, tail, legs };
+}
+
+const WILD = {
+  birdwing: {
+    name: 'Golden birdwing 黃裳鳳蝶', says: ['…', '♪'], kind: 'butterfly', len: 0.16,
+    fly: { speed: 0.13, r: 0.045, acc: 0.25, cruise: 0.8, perch: 0.2, kinds: ['floor', 'wall'], rest: [3, 8], flap: 3.2, glide: true },
+    build: (a) => butterfly(a, { body: '#1c1c20', abdomen: '#e4b52a', fore: '#18181c', hind: '#f3c22b',
+      foreMarks: (w, s) => { for (const k of [0, 1, 2]) blob(w, '', [s * (0.12 + k * 0.07), 0.04 + k * 0.03, 0.009], [0.055, 0.008, 0.003], { outline: false, mat: flatMat('#6c6a66'), rot: [0, 0, s * 0.4] }); },
+      hindMarks: (w, s) => { for (const k of [0, 1, 2, 3]) blob(w, '', [s * (0.08 + k * 0.05), -0.18 + Math.abs(k - 1.5) * 0.02, 0.008], [0.02, 0.02, 0.003], { outline: false, mat: flatMat('#18181c') }); } }),
+  },
+  bluebottle: {
+    name: 'Common bluebottle 青鳳蝶', says: ['…'], kind: 'butterfly', len: 0.09, count: 2,
+    fly: { speed: 0.3, r: 0.03, acc: 0.6, cruise: 0.85, perch: 0.15, kinds: ['floor', 'wall'], rest: [2, 5], flap: 6 },
+    build: (a) => butterfly(a, { body: '#22252a', abdomen: '#d9dad2', fore: '#232528', hind: '#232528',
+      foreMarks: (w, s) => blob(w, '', [s * 0.12, 0.02, 0.009], [0.11, 0.035, 0.003], { outline: false, mat: flatMat('#62d0c2'), rot: [0, 0, s * 0.15] }),
+      hindMarks: (w, s) => { blob(w, '', [s * 0.07, -0.06, 0.009], [0.06, 0.04, 0.003], { outline: false, mat: flatMat('#62d0c2') }); blob(w, '', [s * 0.17, -0.16, 0.009], [0.012, 0.012, 0.003], { outline: false, mat: flatMat('#d8433a') }); } }),
+  },
+  carpenter: {
+    name: 'Carpenter bee 木蜂', says: ['bzz', 'bzzz…'], kind: 'bee', len: 0.04, count: 2,
+    fly: { speed: 0.32, r: 0.022, acc: 1.0, cruise: 0.2, hover: [0.6, 2.2], perch: 0.3, kinds: ['wall', 'floor'], rest: [2, 6] },
+    build: (a) => bee(a, { fur: '#1d1c22', abdomen: '#22212a', wing: '#4a3a75' }),
+  },
+  leafcutter: {
+    name: 'Leafcutter bee 切葉蜂', says: ['bzz'], kind: 'bee', len: 0.03, count: 3,
+    fly: { speed: 0.26, r: 0.018, acc: 0.9, cruise: 0.2, hover: [0.4, 1.6], perch: 0.45, kinds: ['wall'], rest: [2, 7], leaf: true },
+    build: (a) => {
+      const p = bee(a, { fur: '#4b4640', abdomen: '#2d2b29', bands: '#e9e4d6', wing: '#c9d4dc', face: '#d9cfb8' });
+      p.leaf = group(a, [0, 0.05, 0.12]);
+      blob(p.leaf, '#5ea83c', [0, 0, 0], [0.22, 0.3, 0.07], { rot: [0.2, 0, 0.3] });
+      return p;
+    },
+  },
+  dragonfly: {
+    name: 'Dragonfly 蜻蜓', says: ['…'], kind: 'odonate', len: 0.08, count: 2,
+    fly: { speed: 0.55, r: 0.03, acc: 1.6, cruise: 0.3, hover: [0.5, 1.8], perch: 0.35, kinds: ['floor', 'wall'], rest: [3, 9], flat: true },
+    build: (a) => odonate(a, { thorax: '#c8392d', abdomen: '#d93a2c', eye: '#9b2a22', wing: '#eef4f6' }),
+  },
+  damselfly: {
+    name: 'Damselfly 豆娘', says: ['…'], kind: 'odonate', len: 0.06, count: 2,
+    fly: { speed: 0.16, r: 0.025, acc: 0.5, cruise: 0.6, hover: [0.4, 1.2], perch: 0.45, kinds: ['floor', 'wall'], rest: [3, 9] },
+    build: (a) => odonate(a, { thorax: '#2aa79c', abdomen: '#25403f', tip: '#3bb6e6', eye: '#2c8a7e', wing: '#f2f6f6', slim: 0.7 }),
+  },
+  bulbul: {
+    name: 'Light-vented bulbul 白頭翁', says: ['chi-chi-wu!', '♪', 'chirp'], kind: 'bird', len: 0.19, count: 2,
+    fly: { speed: 0.5, r: 0.05, acc: 1.2, cruise: 0.3, perch: 0.75, kinds: ['floor'], rest: [3, 9], flap: 13, bound: true },
+    build: (a) => bird(a, { back: '#7d8c60', belly: '#e6e5d9', head: '#202024', wing: '#8fa458', tail: '#7a875c', bill: '#2a2a2c',
+      marks: (h) => { blob(h, '#f6f5ef', [0, -0.05, 0.06], [0.085, 0.075, 0.06], { outline: false }); blob(h, '#f6f5ef', [0, -0.03, -0.02], [0.125, 0.04, 0.035], { outline: false }); eyes(h, 0.08, 0.025, 0.07, 0.02); } }),
+  },
+  whiteeye: {
+    name: 'Japanese white-eye 綠繡眼', says: ['tsee', 'tsee-tsee', '♪'], kind: 'bird', len: 0.11, count: 3, flock: true,
+    fly: { speed: 0.45, r: 0.035, acc: 1.3, cruise: 0.45, perch: 0.65, kinds: ['floor'], rest: [2, 6], flap: 16, bound: true },
+    build: (a) => bird(a, { back: '#9cbc38', belly: '#ecebe0', head: '#a6c43c', wing: '#86a832', tail: '#86a832', bill: '#3a3a3a', billLen: 0.06, billW: 0.025,
+      marks: (h, b) => { blob(b, '#f1d83a', [0, 0.16, 0.36], [0.1, 0.07, 0.08], { outline: false }); eyes(h, 0.075, 0.025, 0.07, 0.022, '#ffffff'); } }),
+  },
+  barbet: {
+    name: 'Taiwan barbet 五色鳥', says: ['ko-ko-ko', 'kok…', '♪'], kind: 'bird', len: 0.2,
+    fly: { speed: 0.4, r: 0.055, acc: 1.0, cruise: 0.2, perch: 0.8, kinds: ['floor'], rest: [5, 12], flap: 11 },
+    build: (a) => bird(a, { back: '#3c9a3e', belly: '#78c24e', head: '#f2cf2a', wing: '#348a36', tail: '#3c9a3e', bill: '#d8cfb2', billLen: 0.08, billW: 0.05,
+      marks: (h) => {
+        blob(h, '#2b6fd6', [0, -0.02, 0.07], [0.115, 0.1, 0.06], { outline: false });
+        blob(h, '#e03a2e', [0, 0.1, 0.06], [0.04, 0.02, 0.025], { outline: false });
+        blob(h, '#e03a2e', [0, 0.06, -0.09], [0.05, 0.04, 0.03], { outline: false });
+        for (const s of [-1, 1]) blob(h, '#1c1c1f', [s * 0.085, 0.04, 0.03], [0.03, 0.06, 0.018], { outline: false, rot: [0, 0, s * 0.3] });
+        eyes(h, 0.08, 0.03, 0.075, 0.022);
+      } }),
+  },
+  monarch: {
+    name: 'Black-naped monarch 黑枕藍鶲', says: ['chee-chee', '♪'], kind: 'bird', len: 0.16,
+    fly: { speed: 0.5, r: 0.045, acc: 1.3, cruise: 0.35, perch: 0.7, kinds: ['floor'], rest: [3, 8], flap: 14 },
+    build: (a) => bird(a, { back: '#3a78d8', belly: '#dde3ec', head: '#3f86ea', wing: '#4b6ea8', tail: '#3a6cc0', bill: '#2d3a55', tailLen: 0.32,
+      marks: (h) => { blob(h, '#16181c', [0, -0.08, 0.07], [0.05, 0.04, 0.04], { outline: false }); blob(h, '#16181c', [0, 0.07, -0.085], [0.07, 0.015, 0.015], { outline: false }); eyes(h, 0.08, 0.025, 0.07, 0.02); } }),
+  },
+  heron: {
+    name: 'Pacific reef heron 岩鷺', says: ['kraak', '…'], kind: 'heron', len: 0.48,
+    walk: { speed: 0.07, acc: 0.2, h: 0.03, minNz: 0.85, head: 0.45, rest: [4, 12], range: [0.1, 0.4], roam: 0.35 },
+    fly: { speed: 0.5, r: 0.16, acc: 0.6, cruise: 0, perch: 1, kinds: ['floor'], rest: [5, 12], flap: 3.5, chance: 0.3, outside: 1 },
+    build: (a) => {
+      const slate = '#4c5763', leg = '#b8b061';
+      const legs = [];
+      for (const s of [-1, 1]) {
+        const l = group(a, [s * 0.035, 0, 0.42]);
+        blob(l, leg, [0, 0, -0.21], [0.012, 0.012, 0.21], { outline: false });
+        blob(l, leg, [0, 0.03, -0.415], [0.02, 0.06, 0.008], { outline: false });
+        legs.push(l);
+      }
+      blob(a, slate, [0, -0.03, 0.5], [0.1, 0.2, 0.1], { rot: [0.35, 0, 0] });
+      const tail = group(a, [0, -0.2, 0.44]);
+      blob(tail, slate, [0, -0.04, 0], [0.05, 0.07, 0.02], { rot: [0.4, 0, 0] });
+      const neck = group(a, [0, 0.12, 0.56]);
+      blob(neck, slate, [0, 0.02, 0.06], [0.04, 0.04, 0.09], { rot: [0.4, 0, 0] });
+      blob(neck, slate, [0, 0.03, 0.17], [0.035, 0.035, 0.07], { rot: [-0.3, 0, 0] });
+      blob(neck, '#e9e4d2', [0, 0.06, 0.12], [0.012, 0.012, 0.06], { outline: false });
+      const head = group(neck, [0, 0.03, 0.26]);
+      blob(head, slate, [0, 0, 0], [0.045, 0.06, 0.045]);
+      blob(head, '#c4b45a', [0, 0.12, -0.01], [0.014, 0.08, 0.012], { geo: CONE });
+      eyes(head, 0.035, 0.015, 0.033, 0.009, '#e8d94a');
+      const wings = [];
+      for (const s of [-1, 1]) {
+        const w = group(a, [s * 0.08, 0.04, 0.55]);
+        blob(w, slate, [s * 0.22, -0.03, 0], [0.23, 0.09, 0.016]);
+        blob(w, '#3b4550', [s * 0.48, -0.06, 0], [0.12, 0.07, 0.014], { rot: [0, 0, -s * 0.3] });
+        wings.push(w);
+      }
+      return { head, neck, wings, tail, legs };
+    },
+  },
+  lizard: {
+    name: "Swinhoe's tree lizard 斯文豪氏攀蜥", says: ['…', '!'], kind: 'lizard', len: 0.24, count: 2,
+    walk: { speed: 0.22, acc: 1.2, h: 0.016, minNz: -0.2, head: 0.03, rest: [1.5, 5], range: [0.05, 0.22], roam: 0.1 },
+    build: (a) => {
+      const skin = '#7a6a4c', dark = '#4a3e2c', stripe = '#e3c84a';
+      const body = group(a, [0, 0, 0]);
+      blob(body, skin, [0, 0.04, 0.035], [0.055, 0.13, 0.035]);
+      for (const s of [-1, 1]) blob(body, stripe, [s * 0.045, 0.04, 0.04], [0.012, 0.11, 0.008], { outline: false, rot: [0, s * 0.6, 0] });
+      for (const y of [0.11, 0.05, -0.01, -0.07]) blob(body, dark, [0, y, 0.066], [0.04, 0.012, 0.006], { outline: false });
+      for (const y of [0.13, 0.09, 0.05, 0.01, -0.03]) blob(body, dark, [0, y, 0.07], [0.006, 0.012, 0.014], { geo: CONE, outline: false, rot: [Math.PI / 2, 0, 0] });
+      const head = group(body, [0, 0.18, 0.04]);
+      blob(head, skin, [0, 0.01, 0], [0.04, 0.055, 0.03]);
+      blob(head, skin, [0, 0.05, -0.005], [0.024, 0.03, 0.018], { outline: false });
+      eyes(head, 0.015, 0.012, 0.03, 0.008, '#d9c86a');
+      const legs = [];
+      for (const [y, s] of [[0.11, -1], [0.11, 1], [-0.04, -1], [-0.04, 1]]) {
+        const l = group(body, [s * 0.05, y, 0.025]);
+        blob(l, skin, [s * 0.03, 0, -0.008], [0.03, 0.01, 0.01], { rot: [0, s * 0.4, 0] });
+        blob(l, skin, [s * 0.055, 0.012, -0.022], [0.008, 0.016, 0.006], { outline: false });
+        legs.push(l);
+      }
+      // tail: a chain, each piece hanging from the last, so it can wave
+      const tail = [];
+      let parent = group(body, [0, -0.09, 0.03]);
+      for (let i = 0; i < 7; i++) {
+        const r = 0.028 * (1 - i / 8.5);
+        blob(parent, i % 2 ? dark : skin, [0, -0.04, -0.003 * i], [r, 0.05, r * 0.85]);
+        tail.push(parent);
+        parent = group(parent, [0, -0.075, -0.002]);
+      }
+      return { head, legs, tail, body };
+    },
+  },
+  bat: {
+    name: 'Insectivorous bat 食蟲蝙蝠', says: ['((·))', '…', 'zzz'], kind: 'bat', len: 0.18, count: 3,
+    fly: { speed: 0.55, r: 0.04, acc: 1.4, cruise: 0.85, perch: 0.35, kinds: ['ceil'], rest: [6, 16], flap: 11, jitter: true },
+    build: (a) => {
+      const fur = '#5b4535', skin = '#3b2c24';
+      const pose = group(a, [0, 0, 0.05]);
+      blob(pose, fur, [0, 0, 0], [0.05, 0.08, 0.048]);
+      const head = group(pose, [0, 0.09, 0.01]);
+      blob(head, fur, [0, 0, 0], [0.04, 0.038, 0.036]);
+      for (const s of [-1, 1]) blob(head, skin, [s * 0.025, 0.0, 0.045], [0.02, 0.012, 0.035], { geo: CONE, rot: [Math.PI / 2, 0, s * 0.3] });
+      blob(head, skin, [0, 0.035, -0.005], [0.015, 0.012, 0.012], { outline: false });
+      eyes(head, 0.03, 0.01, 0.018, 0.007);
+      const wings = [];
+      for (const s of [-1, 1]) {
+        const w = group(pose, [s * 0.04, 0.02, 0.012]);
+        blob(w, skin, [s * 0.2, -0.03, 0], [0.21, 0.075, 0.006]);
+        for (const k of [0, 1, 2]) blob(w, '', [s * (0.12 + k * 0.08), -0.08 + k * 0.012, -0.004], [0.04, 0.035, 0.005], { outline: false, mat: flatMat('#2a1f19') });
+        wings.push(w);
+      }
+      return { head, wings, pose };
+    },
+  },
+  squirrel: {
+    name: 'Red-bellied tree squirrel 赤腹松鼠', says: ['chuk!', 'chuk-chuk', '…'], kind: 'squirrel', len: 0.4,
+    walk: { speed: 0.5, acc: 2.5, h: 0.024, minNz: -0.2, head: 0.07, rest: [1, 4], range: [0.12, 0.4], roam: 0.15 },
+    build: (a) => {
+      const fur = '#7a7263', belly = '#b4522c', pale = '#b3aa98';
+      const body = group(a, [0, 0, 0]);
+      blob(body, fur, [0, 0.03, 0.1], [0.08, 0.14, 0.075], { rot: [0.15, 0, 0] });
+      blob(body, belly, [0, 0.04, 0.065], [0.06, 0.11, 0.04], { outline: false, rot: [0.15, 0, 0] });
+      const head = group(body, [0, 0.17, 0.15]);
+      blob(head, fur, [0, 0, 0], [0.06, 0.07, 0.055]);
+      blob(head, fur, [0, 0.06, -0.012], [0.03, 0.03, 0.026], { outline: false });
+      blob(head, '', [0, 0.088, -0.008], [0.01, 0.006, 0.008], { outline: false, mat: flatMat('#2a2220') });
+      for (const s of [-1, 1]) blob(head, fur, [s * 0.035, -0.015, 0.05], [0.015, 0.01, 0.022]);
+      eyes(head, 0.04, 0.015, 0.037, 0.012, '#e8e0cc');
+      const legs = [];
+      for (const [y, s] of [[0.1, -1], [0.1, 1], [-0.06, -1], [-0.06, 1]]) {
+        const l = group(body, [s * 0.05, y, 0.06]);
+        blob(l, fur, [0, 0, -0.03], [0.018, 0.022, 0.035], { outline: false });
+        legs.push(l);
+      }
+      // the bushy tail: a chain that sweeps back, then curls up and over
+      const tail = [];
+      let parent = group(body, [0, -0.11, 0.09]);
+      parent.rotation.x = 0.1;
+      for (let i = 0; i < 7; i++) {
+        const r = 0.05 + Math.min(i, 4) * 0.008;
+        blob(parent, i === 6 ? pale : fur, [0, -0.03, 0], [r * 0.9, 0.055, r]);
+        if (i % 2) blob(parent, pale, [0, -0.03, r * 0.55], [r * 0.5, 0.03, r * 0.3], { outline: false });
+        tail.push(parent);
+        parent = group(parent, [0, -0.055, 0]);
+        parent.rotation.x = -0.42;
+      }
+      return { head, legs, tail, body };
+    },
+  },
+};
+const WILD_ROSTER = Object.entries(WILD).flatMap(([k, s]) => Array(s.count || 1).fill(k));
+
+// ---- the distance field of one model, in holder-local metres (the model's centre at 0)
+const fields = new WeakMap();   // model (raw group) -> field
+const fieldQueue = [];
+function edt1(f, n, d, v, z) {   // Felzenszwalb & Huttenlocher: squared distance transform of a sampled function
+  let k = 0;
+  v[0] = 0; z[0] = -Infinity; z[1] = Infinity;
+  for (let q = 1; q < n; q++) {
+    let s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]);
+    while (s <= z[k]) { k--; s = ((f[q] + q * q) - (f[v[k]] + v[k] * v[k])) / (2 * q - 2 * v[k]); }
+    k++; v[k] = q; z[k] = s; z[k + 1] = Infinity;
+  }
+  k = 0;
+  for (let q = 0; q < n; q++) { while (z[k + 1] < q) k++; d[q] = (q - v[k]) * (q - v[k]) + f[v[k]]; }
+}
+function sqDist(mask, want, nx, ny, nz) {
+  const N = nx * ny * nz, D = new Float32Array(N), BIG = 1e10;
+  for (let i = 0; i < N; i++) D[i] = mask[i] === want ? 0 : BIG;
+  const n = Math.max(nx, ny, nz), f = new Float64Array(n), d = new Float64Array(n), v = new Int32Array(n), z = new Float64Array(n + 1);
+  const pass = (len, count, at) => {
+    for (let c = 0; c < count; c++) {
+      for (let q = 0; q < len; q++) f[q] = D[at(c, q)];
+      edt1(f, len, d, v, z);
+      for (let q = 0; q < len; q++) D[at(c, q)] = d[q];
+    }
+  };
+  pass(nx, ny * nz, (c, q) => c * nx + q);
+  pass(ny, nx * nz, (c, q) => (c % nx) + q * nx + Math.floor(c / nx) * nx * ny);
+  pass(nz, nx * ny, (c, q) => c + q * nx * ny);
+  return D;
+}
+function buildField(b) {
+  const raw = b.raw, rs = raw.scale.x, cen = b.center, box = b.box;
+  const size = box.getSize(new THREE.Vector3());
+  const c = Math.max(size.x, size.y, size.z) / 44, M = 6;
+  const nx = Math.ceil(size.x / c) + 2 * M, ny = Math.ceil(size.y / c) + 2 * M, nz = Math.ceil(size.z / c) + 2 * M;
+  const ox = box.min.x - cen.x - (M - 0.5) * c, oy = box.min.y - cen.y - (M - 0.5) * c, oz = box.min.z - cen.z - (M - 0.5) * c;
+  const cols = new Array(nx * ny);
+  const jx = 0.01371 * c, jy = 0.00733 * c;   // so no column runs exactly along an edge
+  raw.traverse((o) => {
+    if (!o.isMesh || o.userData.blockId === undefined) return;
+    const pos = o.geometry.attributes.position, idx = o.geometry.index;
+    const count = idx ? idx.count : pos.count;
+    const P = new Float64Array(9);
+    for (let t = 0; t < count; t += 3) {
+      for (let v = 0; v < 3; v++) {
+        const vi = idx ? idx.getX(t + v) : t + v;
+        P[3 * v] = pos.getX(vi) * rs - cen.x; P[3 * v + 1] = pos.getY(vi) * rs - cen.y; P[3 * v + 2] = pos.getZ(vi) * rs - cen.z;
+      }
+      const [ax, ay, az, bx, by, bz, cx, cy, cz] = P;
+      const area = (bx - ax) * (cy - ay) - (by - ay) * (cx - ax);
+      if (Math.abs(area) < 1e-14) continue;
+      const i0 = Math.max(0, Math.ceil((Math.min(ax, bx, cx) - ox - jx) / c)), i1 = Math.min(nx - 1, Math.floor((Math.max(ax, bx, cx) - ox - jx) / c));
+      const j0 = Math.max(0, Math.ceil((Math.min(ay, by, cy) - oy - jy) / c)), j1 = Math.min(ny - 1, Math.floor((Math.max(ay, by, cy) - oy - jy) / c));
+      for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) {
+        const px = ox + i * c + jx, py = oy + j * c + jy;
+        const w0 = ((bx - px) * (cy - py) - (by - py) * (cx - px)) / area;
+        const w1 = ((cx - px) * (ay - py) - (cy - py) * (ax - px)) / area;
+        const w2 = 1 - w0 - w1;
+        if (w0 < 0 || w1 < 0 || w2 < 0) continue;
+        (cols[i + j * nx] ||= []).push(w0 * az + w1 * bz + w2 * cz);
+      }
+    }
+  });
+  const NXY = nx * ny, N = NXY * nz, solid = new Uint8Array(N), odd = [];
+  const eps = 1e-6 * size.z;
+  for (let col = 0; col < NXY; col++) {
+    const zs = cols[col];
+    if (!zs) continue;
+    zs.sort((p, q) => p - q);
+    const u = [];
+    for (const z of zs) if (!u.length || z - u[u.length - 1] > eps) u.push(z);
+    if (u.length % 2) { odd.push(col); continue; }   // an open seam: take the neighbours' word for it
+    for (let q = 0; q < u.length; q += 2) {
+      const k0 = Math.max(0, Math.ceil((u[q] - oz) / c)), k1 = Math.min(nz - 1, Math.floor((u[q + 1] - oz) / c));
+      for (let k = k0; k <= k1; k++) solid[col + k * NXY] = 1;
+    }
+  }
+  for (const col of odd) {
+    const i = col % nx, j = Math.floor(col / nx);
+    const nb = [[i - 1, j], [i + 1, j], [i, j - 1], [i, j + 1]].filter(([p, q]) => p >= 0 && q >= 0 && p < nx && q < ny).map(([p, q]) => p + q * nx);
+    for (let k = 0; k < nz; k++) {
+      let n = 0;
+      for (const x of nb) n += solid[x + k * NXY];
+      if (n * 2 > nb.length) solid[col + k * NXY] = 1;
+    }
+  }
+  const dOut = sqDist(solid, 1, nx, ny, nz), dIn = sqDist(solid, 0, nx, ny, nz);
+  const sd = new Float32Array(N);
+  for (let i = 0; i < N; i++) sd[i] = solid[i] ? -(Math.sqrt(dIn[i]) - 0.5) * c : (Math.sqrt(dOut[i]) - 0.5) * c;
+  let edge = Infinity;
+  const air = [], surf = [];
+  for (let k = 0; k < nz; k++) for (let j = 0; j < ny; j++) for (let i = 0; i < nx; i++) {
+    const at = i + j * nx + k * NXY, v = sd[at];
+    if (i === 0 || j === 0 || k === 0 || i === nx - 1 || j === ny - 1 || k === nz - 1) edge = Math.min(edge, v);
+    const inBox = i >= M && j >= M && k >= M && i < nx - M && j < ny - M && k < nz - M;
+    const nearBox = i >= M - 1 && j >= M - 1 && k >= M - 1 && i <= nx - M && j <= ny - M && k <= nz - M;
+    if (inBox && v >= 1.5 * c) air.push(at);
+    if (nearBox && v >= 0 && v < c) surf.push(at);
+  }
+  return { c, nx, ny, nz, ox, oy, oz, sd, edge, air: Int32Array.from(air), surf: Int32Array.from(surf) };
+}
+function fieldAt(f, gx, gy, gz) {   // trilinear, in cell coordinates
+  const i = Math.min(f.nx - 2, Math.max(0, Math.floor(gx))), j = Math.min(f.ny - 2, Math.max(0, Math.floor(gy))), k = Math.min(f.nz - 2, Math.max(0, Math.floor(gz)));
+  const u = gx - i, v = gy - j, w = gz - k, X = 1, Y = f.nx, Z = f.nx * f.ny, a = i + j * Y + k * Z, d = f.sd;
+  const c00 = d[a] + (d[a + X] - d[a]) * u, c10 = d[a + Y] + (d[a + Y + X] - d[a + Y]) * u;
+  const c01 = d[a + Z] + (d[a + Z + X] - d[a + Z]) * u, c11 = d[a + Z + Y] + (d[a + Z + Y + X] - d[a + Z + Y]) * u;
+  const c0 = c00 + (c10 - c00) * v, c1 = c01 + (c11 - c01) * v;
+  return c0 + (c1 - c0) * w;
+}
+const cellPoint = (f, at, out) => out.set(f.ox + (at % f.nx) * f.c, f.oy + (Math.floor(at / f.nx) % f.ny) * f.c, f.oz + Math.floor(at / (f.nx * f.ny)) * f.c);
+
+// ---- the world as the animals see it: every cube on show, the ground, and a region to stay in
+let act = [];            // the cubes on show, with their fields
+const region = new THREE.Box3();
+let groundZ = 0, wildScale = 1, layoutSig = '', settledSig = '', settled = false;
+function refreshActive() {
+  act = [];
+  let sig = '', moving = false;
+  region.makeEmpty();
+  for (const [id, b] of Object.entries(blocks)) {
+    const h = b.holder;
+    if (!h.visible || h.userData.scale !== 1 || !b.raw || !b.box || b.box.isEmpty()) continue;
+    const f = fields.get(b.raw);
+    if (!f) { if (!fieldQueue.includes(b)) fieldQueue.push(b); continue; }
+    const s = h.scale.x;
+    if (s < 0.6) continue;
+    if (Math.abs(s - 1) > 1e-3 || h.position.distanceToSquared(h.userData.target) > 1e-8) moving = true;
+    const wbox = b.box.clone().translate(tmpA.copy(b.center).negate()).applyMatrix4(h.matrixWorld);
+    act.push({ id, b, f, raw: b.raw, h, px: h.position.x, py: h.position.y, pz: h.position.z, s, wbox });
+    region.union(wbox);
+    sig += `${id}:${b.raw.uuid}:${h.userData.target.toArray().map((v) => v.toFixed(3)).join(',')};`;
+  }
+  groundZ = act.length ? Math.min(...act.map((a) => a.wbox.min.z)) : 0;
+  wildScale = nominal / 0.45;
+  layoutSig = sig;
+  settled = !moving;
+}
+function sdf(x, y, z) {
+  let d = z - groundZ;
+  for (const a of act) {
+    const f = a.f, s = a.s;
+    const gx = ((x - a.px) / s - f.ox) / f.c, gy = ((y - a.py) / s - f.oy) / f.c, gz = ((z - a.pz) / s - f.oz) / f.c;
+    const ex = Math.max(0, -gx, gx - (f.nx - 1)), ey = Math.max(0, -gy, gy - (f.ny - 1)), ez = Math.max(0, -gz, gz - (f.nz - 1));
+    const v = (ex || ey || ez ? Math.hypot(ex, ey, ez) * f.c + f.edge : fieldAt(f, gx, gy, gz)) * s;
+    if (v < d) d = v;
+  }
+  return d;
+}
+const sdfV = (p) => sdf(p.x, p.y, p.z);
+function grad(p, out, e = 0.006 * wildScale) {
+  out.set(sdf(p.x + e, p.y, p.z) - sdf(p.x - e, p.y, p.z), sdf(p.x, p.y + e, p.z) - sdf(p.x, p.y - e, p.z), sdf(p.x, p.y, p.z + e) - sdf(p.x, p.y, p.z - e));
+  return out.lengthSq() > 1e-12 ? out.normalize() : out.set(0, 0, 1);
+}
+const insideCube = (x, y, z) => act.some((a) => x >= a.wbox.min.x && x <= a.wbox.max.x && y >= a.wbox.min.y && y <= a.wbox.max.y && z >= a.wbox.min.z && z <= a.wbox.max.z);
+const inRegion = (x, y, z, roam) => x >= region.min.x - roam && x <= region.max.x + roam && y >= region.min.y - roam && y <= region.max.y + roam && z >= groundZ - 1e-3 && z <= region.max.z + roam * 1.5;
+const actFor = (raw) => act.find((a) => a.raw === raw);
+
+// ---- trips: A* on a lattice around the start, then string-pulled and smoothed into a curve
+const NB = [];
+for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) for (let k = -1; k <= 1; k++) if (i || j || k) NB.push([i, j, k, Math.hypot(i, j, k)]);
+function astar(from, goal, h, cost, maxN = 5000) {
+  const key = (i, j, k) => ((i + 512) * 1024 + (j + 512)) * 1024 + (k + 512);
+  const gi = Math.round((goal.x - from.x) / h), gj = Math.round((goal.y - from.y) / h), gk = Math.round((goal.z - from.z) / h);
+  const I = [0], J = [0], K = [0], G = [0], P = [-1], closed = [false];
+  const index = new Map([[key(0, 0, 0), 0]]), costs = new Map();
+  const heap = [[Math.hypot(gi, gj, gk) * h * 1.3, 0]];
+  const push = (e) => { heap.push(e); let n = heap.length - 1; while (n) { const p = (n - 1) >> 1; if (heap[p][0] <= e[0]) break; heap[n] = heap[p]; n = p; } heap[n] = e; };
+  const pop = () => {
+    const top = heap[0], last = heap.pop();
+    if (heap.length) { let n = 0; for (;;) { let m = 2 * n + 1; if (m >= heap.length) break; if (m + 1 < heap.length && heap[m + 1][0] < heap[m][0]) m++; if (heap[m][0] >= last[0]) break; heap[n] = heap[m]; n = m; } heap[n] = last; }
+    return top;
+  };
+  let expanded = 0;
+  while (heap.length && expanded < maxN) {
+    const [, n] = pop();
+    if (closed[n]) continue;
+    closed[n] = true;
+    expanded++;
+    if (Math.max(Math.abs(I[n] - gi), Math.abs(J[n] - gj), Math.abs(K[n] - gk)) <= 1) {
+      const out = [];
+      for (let m = n; m >= 0; m = P[m]) out.push(new THREE.Vector3(from.x + I[m] * h, from.y + J[m] * h, from.z + K[m] * h));
+      out.reverse();
+      out[0].copy(from);
+      return out;
+    }
+    for (const [di, dj, dk, len] of NB) {
+      const i = I[n] + di, j = J[n] + dj, k = K[n] + dk, kk = key(i, j, k);
+      let c = costs.get(kk);
+      if (c === undefined) { c = cost(from.x + i * h, from.y + j * h, from.z + k * h); costs.set(kk, c); }
+      if (!c) continue;
+      const g = G[n] + len * h * c;
+      let m = index.get(kk);
+      if (m === undefined) { m = I.length; index.set(kk, m); I.push(i); J.push(j); K.push(k); G.push(Infinity); P.push(-1); closed.push(false); }
+      if (closed[m] || g >= G[m]) continue;
+      G[m] = g; P[m] = n;
+      push([g + Math.hypot(i - gi, j - gj, k - gk) * h * 1.3, m]);
+    }
+  }
+  return null;
+}
+function segOk(a, b, ok, step) {
+  const n = Math.ceil(a.distanceTo(b) / step);
+  for (let q = 1; q < n; q++) { tmpC.lerpVectors(a, b, q / n); if (!ok(tmpC.x, tmpC.y, tmpC.z)) return false; }
+  return true;
+}
+const tmpC = new THREE.Vector3(), tmpN = new THREE.Vector3(), tmpU = new THREE.Vector3();
+function pull(pts, ok, step) {   // keep only the corners
+  const out = [pts[0]];
+  let i = 0;
+  while (i < pts.length - 1) {
+    let j = i + 1;
+    while (j + 1 < pts.length && segOk(pts[i], pts[j + 1], ok, step)) j++;
+    out.push(pts[j]);
+    i = j;
+  }
+  return out;
+}
+// Rules for a flight of clearance r, and for a walk over the stone.
+function flyRules(r, roam, outside, from) {
+  const near = (r * 2.5) ** 2;
+  return {
+    cost: (x, y, z) => {
+      if (!inRegion(x, y, z, roam)) return 0;
+      const d = sdf(x, y, z);
+      if (d < r) return d > 0.25 * r && (x - from.x) ** 2 + (y - from.y) ** 2 + (z - from.z) ** 2 < near ? 4 : 0;   // squeezing out of a tight spot
+
+      return 1 + (insideCube(x, y, z) ? 0 : outside) + 0.8 * Math.max(0, 1 - (d - r) / (1.5 * r));
+    },
+    ok: (x, y, z) => inRegion(x, y, z, roam * 1.2) && sdf(x, y, z) >= r * 0.92,
+  };
+}
+function walkRules(w) {
+  const h = w.h * wildScale, head = w.head * wildScale, roam = w.roam * wildScale;
+  const surfaceOk = (x, y, z, lo, hi, slack) => {
+    if (!inRegion(x, y, z, roam)) return false;
+    const d = sdf(x, y, z);
+    if (d < lo || d > hi) return false;
+    grad(tmpU.set(x, y, z), tmpN);
+    if (tmpN.z < w.minNz - slack) return false;
+    return sdf(x + tmpN.x * head, y + tmpN.y * head, z + tmpN.z * head) >= head * (0.75 - slack);
+  };
+  return {
+    h,
+    cost: (x, y, z) => (surfaceOk(x, y, z, 0.05 * h, 1.05 * h, 0) ? 1 : 0),
+    ok: (x, y, z) => surfaceOk(x, y, z, -0.3 * h, 1.4 * h, 0.12),
+  };
+}
+const nearestAct = (p) => {
+  let best = null, bd = Infinity;
+  for (const a of act) { const d = a.wbox.distanceToPoint(p); if (d < bd) { bd = d; best = a; } }
+  return best;
+};
+const toLocal = (a, p) => new THREE.Vector3((p.x - a.px) / a.s, (p.y - a.py) / a.s, (p.z - a.pz) / a.s);
+const holderToWorld = (h, p, out) => out.copy(p).multiplyScalar(h.scale.x).add(h.position);
+const rand = (lo, hi) => lo + Math.random() * (hi - lo);
+const pickOf = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+// A place on the stone: a random surface cell, put onto the surface, with its normal (world).
+function surfaceSample(a) {
+  const f = a.f;
+  if (!f.surf.length) return null;
+  const p = cellPoint(f, pickOf(f.surf), new THREE.Vector3()).multiplyScalar(a.s).add(tmpA.set(a.px, a.py, a.pz));
+  const n = grad(p, new THREE.Vector3());
+  const d = sdfV(p);
+  if (d > f.c * a.s * 1.5 || d < -f.c * a.s) return null;
+  p.addScaledVector(n, -d);
+  return { p, n, kind: n.z > 0.75 ? 'floor' : n.z < -0.75 ? 'ceil' : Math.abs(n.z) < 0.45 ? 'wall' : 'slope' };
+}
+// A place on the stone near p (a flock settling next to its leader).
+function surfaceNear(p, radius) {
+  const a = nearestAct(p);
+  if (!a) return null;
+  const f = a.f, q = new THREE.Vector3();
+  for (let tries = 0; tries < 12; tries++) {
+    q.copy(p).add(tmpA.set(rand(-1, 1), rand(-1, 1), rand(-0.6, 0.6)).multiplyScalar(radius));
+    const gx = Math.round(((q.x - a.px) / a.s - f.ox) / f.c), gy = Math.round(((q.y - a.py) / a.s - f.oy) / f.c), gz = Math.round(((q.z - a.pz) / a.s - f.oz) / f.c);
+    if (gx < 0 || gy < 0 || gz < 0 || gx >= f.nx || gy >= f.ny || gz >= f.nz) continue;
+    const v = f.sd[gx + gy * f.nx + gz * f.nx * f.ny];
+    if (v < 0 || v >= f.c * 1.5) continue;
+    const w = cellPoint(f, gx + gy * f.nx + gz * f.nx * f.ny, new THREE.Vector3()).multiplyScalar(a.s).add(tmpA.set(a.px, a.py, a.pz));
+    const n = grad(w, new THREE.Vector3()), d = sdfV(w);
+    w.addScaledVector(n, -d);
+    return { p: w, n, kind: n.z > 0.75 ? 'floor' : n.z < -0.75 ? 'ceil' : Math.abs(n.z) < 0.45 ? 'wall' : 'slope' };
+  }
+  return null;
+}
+function airSample(a, r) {
+  const f = a.f;
+  if (!f.air.length) return null;
+  for (let tries = 0; tries < 6; tries++) {
+    const at = pickOf(f.air);
+    if (f.sd[at] * a.s < r) continue;
+    const p = cellPoint(f, at, new THREE.Vector3()).multiplyScalar(a.s).add(tmpA.set(a.px, a.py, a.pz));
+    p.x += rand(-0.5, 0.5) * f.c * a.s; p.y += rand(-0.5, 0.5) * f.c * a.s; p.z += rand(-0.5, 0.5) * f.c * a.s;
+    if (sdfV(p) >= r) return p;
+  }
+  return null;
+}
+function outsideSample(r, roam) {
+  for (let tries = 0; tries < 8; tries++) {
+    const p = new THREE.Vector3(rand(region.min.x - roam, region.max.x + roam), rand(region.min.y - roam, region.max.y + roam), rand(groundZ + r, region.max.z + roam));
+    if (!insideCube(p.x, p.y, p.z) && sdfV(p) >= r) return p;
+  }
+  return null;
+}
+
+function groundSample(roam) {
+  for (let tries = 0; tries < 6; tries++) {
+    const p = new THREE.Vector3(rand(region.min.x - roam, region.max.x + roam), rand(region.min.y - roam, region.max.y + roam), groundZ);
+    if (!insideCube(p.x, p.y, p.z + 1e-3)) return { p, n: new THREE.Vector3(0, 0, 1), kind: 'floor' };
+  }
+  return null;
+}
+
+const planQueue = [];
+class Wild {
+  constructor(kind, leader) {
+    this.kind = kind;
+    this.spec = WILD[kind];
+    this.leader = leader;
+    this.root = new THREE.Group();
+    this.body = new THREE.Group();
+    this.root.add(this.body);
+    this.parts = this.spec.build(this.body);
+    this.body.traverse((o) => { if (o.isMesh && o.material !== OUTLINE) o.userData.critter = this; });
+    wildLayer.add(this.root);
+    const el = document.createElement('div');
+    el.className = 'emote';
+    el.appendChild(document.createElement('span'));
+    this.bubble = new CSS2DObject(el);
+    this.bubble.center.set(0.5, 1);
+    scene.add(this.bubble);
+    this.mode = 'gone';           // gone | wait | move | perch | hover
+    this.fade = 0;
+    this.pos = new THREE.Vector3();
+    this.up = new THREE.Vector3(0, 0, 1);
+    this.fwd = new THREE.Vector3(0, 1, 0);
+    this.dir = new THREE.Vector3(0, 1, 0);   // the way it is actually moving
+    this.speed = 0;
+    this.phase = Math.random() * 10;
+    this.flap = Math.random() * 6;
+    this.timer = 0;
+    this.sayUntil = 0;
+    this.goal = null;
+    this.stuck = 0;
+    this.root.visible = false;
+  }
+  get walker() { return !!this.spec.walk; }
+  say(text, seconds = 1.8) {
+    this.bubble.element.firstChild.textContent = text;
+    this.sayUntil = performance.now() + seconds * 1000;
+  }
+  poke() {
+    this.say(`${this.spec.name}`, 2.8);
+    if (this.mode === 'perch' || this.mode === 'hover') { this.timer = 0; this.startle = true; }
+  }
+  // where it is now, in the world
+  anchorAct() { return this.anchor && actFor(this.anchor.raw) && this.anchor.h.visible ? actFor(this.anchor.raw) : null; }
+  setAnchor(a) { this.anchor = a ? { raw: a.raw, h: a.h } : null; }
+  // ---- choosing where to go next, and asking for a plan
+  spawn() {
+    if (!act.length) return false;
+    for (let tries = 0; tries < 30; tries++) {
+      const a = pickOf(act);
+      const fly = this.spec.fly;
+      if (this.walker || (fly.kinds && Math.random() < 0.6)) {
+        const s = this.walker && Math.random() < 0.25 ? groundSample(this.spec.walk.roam * wildScale) : surfaceSample(a);
+        if (!s || !this.perchOk(s)) continue;
+        this.settle(a, s.p, s.n, 'perch');
+        this.timer = rand(0.5, 3);
+        return true;
+      }
+      const p = airSample(a, fly.r * wildScale) || (fly.outside ? outsideSample(fly.r * wildScale, 0.2 * wildScale) : null);
+      if (!p) continue;
+      this.settle(nearestAct(p), p, tmpN.set(0, 0, 1), 'hover');
+      this.timer = rand(0.3, 1.5);
+      return true;
+    }
+    return false;
+  }
+  settle(a, p, n, mode) {
+    this.setAnchor(a);
+    this.local = toLocal(a, p);
+    this.localN = n.clone();
+    this.mode = mode;
+    this.lastWasPerch = mode === 'perch';
+    this.pos.copy(p);
+    if (mode === 'perch') this.up.copy(n);
+    this.speed = 0;
+  }
+  perchOk(s) {
+    const sc = wildScale, len = this.spec.len * sc;
+    if (this.walker) {
+      const w = this.spec.walk;
+      return s.n.z >= w.minNz && sdf(s.p.x + s.n.x * w.head * sc, s.p.y + s.n.y * w.head * sc, s.p.z + s.n.z * w.head * sc) >= w.head * sc * 0.8 && inRegion(s.p.x, s.p.y, s.p.z, w.roam * sc);
+    }
+    if (!this.spec.fly.kinds.includes(s.kind)) return false;
+    const room = len * (this.spec.kind === 'bird' ? 0.45 : 0.35);
+    return sdf(s.p.x + s.n.x * room, s.p.y + s.n.y * room, s.p.z + s.n.z * room) >= room * 0.75;
+  }
+  decide() {
+    if (!act.length) return;
+    const a = this.anchorAct();
+    if (a) this.local = toLocal(a, this.pos);
+    this.mode = 'wait';
+    planQueue.push(this);
+  }
+  plan() {
+    if (this.mode !== 'wait') return;
+    if (!act.length) { this.mode = 'gone'; return; }
+    // one try a call (each is an A* search), so a frame never holds more than one or two
+    const sc = wildScale, here = this.pos.clone();
+    const flyChance = this.walker ? (this.spec.fly?.chance ?? 0) : 1;
+    this.tries = (this.tries || 0) + 1;
+    const fly = Math.random() < flyChance || (this.walker && this.spec.fly && this.tries > 3);
+    if (fly ? this.planFlight(here, sc) : this.planWalk(here, sc)) { this.tries = 0; this.stuck = 0; return; }
+    if (this.tries < 5) { planQueue.push(this); return; }
+    // nowhere to go from here: rest a little and try again
+    this.tries = 0;
+    if (++this.stuck > 6) { this.mode = 'gone'; this.stuck = 0; return; }   // hopelessly boxed in: fade out, come back elsewhere
+    const a = this.anchorAct() || nearestAct(here);
+    this.settle(a, here, this.up, this.walker || this.lastWasPerch ? 'perch' : 'hover');
+    this.timer = rand(1, 3);
+  }
+  planWalk(here, sc) {
+    const w = this.spec.walk, rules = walkRules(w);
+    let target = null;
+    for (let tries = 0; tries < 25 && !target; tries++) {
+      const roll = Math.random();
+      const s = roll < 0.6 ? surfaceNear(here, w.range[1] * sc) : roll < 0.8 ? groundSample(w.roam * sc) : surfaceSample(pickOf(act));
+      if (!s || !this.perchOk(s)) continue;
+      const d = s.p.distanceTo(here);
+      if (d < w.range[0] * sc || d > w.range[1] * sc) continue;
+      target = s;
+    }
+    if (!target) return false;
+    const goal = target.p.clone().addScaledVector(target.n, rules.h * 0.5);
+    const path = astar(here, goal, rules.h, rules.cost, 2000);
+    if (!path) return false;
+    path.push(target.p);
+    this.startPath(pull(path, rules.ok, rules.h * 0.4), { walk: true, end: 'perch', n: target.n, a: nearestAct(target.p), speed: w.speed * sc, acc: w.acc * sc, h: rules.h });
+    return true;
+  }
+  planFlight(here, sc) {
+    const f = this.spec.fly, r = f.r * sc, roam = (this.spec.walk?.roam ?? 0.12) * sc;
+    const rules = flyRules(r, roam, f.outside ? 0 : 1.2, here);
+    const h = Math.min(Math.max(r * 0.75, 0.012 * sc), 0.05 * sc);
+    let goal = null, perch = null;
+    const lead = this.tries <= 2 && this.leader && this.leader.goal && this.leader.mode !== 'gone' ? this.leader : null;   // a flock follows its leader, else goes its own way
+    const wantPerch = f.kinds && (this.startle ? false : lead ? lead.lastWasPerch : Math.random() < f.perch);
+    this.startle = false;
+    for (let tries = 0; tries < 30 && !goal; tries++) {
+      const a = lead ? (nearestAct(lead.goal) || pickOf(act)) : Math.random() < 0.6 ? (this.anchorAct() || pickOf(act)) : pickOf(act);
+      if (wantPerch) {
+        const s = lead ? surfaceNear(lead.pos, 0.12 * sc) : surfaceSample(a);
+        if (!s || !this.perchOk(s)) continue;
+        const off = Math.max(r * 1.1, this.spec.len * sc * 0.4);
+        const g = s.p.clone().addScaledVector(s.n, off);
+        if (sdfV(g) < r) continue;
+        goal = g; perch = s;
+      } else {
+        let p = null;
+        if (lead) p = lead.goal.clone().add(tmpA.set(rand(-1, 1), rand(-1, 1), rand(-0.5, 0.5)).multiplyScalar(0.07 * sc));
+        else if (f.outside && Math.random() < 0.5) p = outsideSample(r, roam);
+        else p = airSample(a, r) || (Math.random() < 0.3 ? outsideSample(r, roam) : null);
+        if (!p || sdfV(p) < r || !inRegion(p.x, p.y, p.z, roam)) continue;
+        const d = p.distanceTo(here);
+        if (!lead && tries < 20 && (d < 0.08 * sc || d > 0.5 * sc)) continue;
+        goal = p;
+      }
+    }
+    if (!goal) return false;
+    // leave a perch straight out along its normal, then plan from there
+    let start = here, lift = null;
+    if (this.mode === 'wait' && this.lastWasPerch) {
+      lift = here.clone().addScaledVector(this.up, Math.max(r * 1.1, this.spec.len * sc * 0.4));
+      if (sdfV(lift) >= r * 0.9) start = lift; else lift = null;
+    } else if (this.speed > 0.02 * sc) {   // already flying: carry on the way it was going
+      const ahead = here.clone().addScaledVector(this.dir, h * 1.5);
+      if (sdfV(ahead) >= r) { lift = ahead; start = ahead; }
+    }
+    const path = astar(start, goal, h, rules.cost, 3000);
+    if (!path) return false;
+    path.push(goal);
+    let pts = pull(path, rules.ok, h * 0.5);
+    if (lift) pts.unshift(here.clone());
+    if (perch) {
+      const out = perch.p.clone().addScaledVector(perch.n, Math.max(r * 1.1, this.spec.len * sc * 0.4) * 2.2);
+      if (pts.length > 2 && sdfV(out) >= r && segOk(pts[pts.length - 2], out, rules.ok, h * 0.5)) pts.splice(pts.length - 1, 0, out);
+      pts.push(perch.p);
+    }
+    // butterflies, bats: a little wander between the corners
+    if (f.jitter || this.spec.kind === 'butterfly') pts = this.wander(pts, r, rules.ok);
+    this.startPath(pts, { walk: false, end: perch ? 'perch' : f.hover ? 'hover' : 'cruise', n: perch?.n, a: nearestAct(perch ? perch.p : goal), speed: f.speed * sc, acc: f.acc * sc, h, approach: perch ? Math.max(r * 1.1, this.spec.len * sc * 0.4) : 0, lift: lift ? lift.distanceTo(here) : 0 });
+    this.goal = goal;
+    return true;
+  }
+  wander(pts, r, ok) {
+    const out = [pts[0]];
+    for (let i = 1; i < pts.length; i++) {
+      const a = pts[i - 1], b = pts[i], len = a.distanceTo(b), n = Math.floor(len / (r * 3));
+      for (let q = 1; q <= n; q++) {
+        const m = a.clone().lerp(b, q / (n + 1)).add(tmpA.set(rand(-1, 1), rand(-1, 1), rand(-1, 1)).multiplyScalar(r * 0.6));
+        if (sdfV(m) >= r && segOk(out[out.length - 1], m, ok, r * 0.5)) out.push(m);
+      }
+      out.push(b);
+    }
+    return out;
+  }
+  startPath(pts, o) {
+    const a = o.a || nearestAct(pts[pts.length - 1]);
+    this.setAnchor(a);
+    const local = pts.filter((p, i) => i === 0 || p.distanceToSquared(pts[i - 1]) > 1e-10).map((p) => toLocal(a, p));
+    if (local.length < 2) { this.settle(a, pts[pts.length - 1], o.n || tmpN.set(0, 0, 1), o.end === 'perch' ? 'perch' : 'hover'); this.timer = 1; return; }
+    if (local.length === 2) local.splice(1, 0, local[0].clone().lerp(local[1], 0.5));
+    const curve = new THREE.CatmullRomCurve3(local, false, 'centripetal');
+    curve.arcLengthDivisions = Math.max(60, local.length * 12);
+    this.path = { ...o, curve, L: curve.getLength() * a.s, s: 0, startUp: this.up.clone() };
+    this.mode = 'move';
+    this.stuck = 0;
+    this.leaf = !!(this.spec.fly?.leaf && o.end === 'perch' && o.n && Math.abs(o.n.z) < 0.5);
+  }
+  arrive() {
+    const p = this.path, a = this.anchorAct();
+    this.path = null;
+    if (!a) { this.mode = 'gone'; return; }
+    if (p.end === 'perch') {
+      this.settle(a, this.pos, p.n || this.up, 'perch');
+      const rest = (this.spec.walk || this.spec.fly).rest;
+      this.timer = rand(rest[0], rest[1]);
+      this.lastWasPerch = true;
+      if (this.spec.kind === 'bird' || this.spec.kind === 'heron' || this.spec.kind === 'squirrel') if (Math.random() < 0.2) this.say(pickOf(this.spec.says));
+    } else if (p.end === 'hover') {
+      this.settle(a, this.pos, tmpN.set(0, 0, 1), 'hover');
+      this.timer = rand(...this.spec.fly.hover);
+      this.lastWasPerch = false;
+    } else {   // cruising: straight on to the next place
+      this.lastWasPerch = false;
+      if (Math.random() < 0.06) this.say(pickOf(this.spec.says));
+      this.decide();
+    }
+  }
+  // after the cubes moved: is the way (or the place) still clear?
+  validate() {
+    if (this.mode === 'gone' || this.mode === 'wait') return;
+    const a = this.anchorAct();
+    if (!a) { this.mode = 'gone'; return; }
+    const sc = wildScale;
+    if (this.mode === 'move') {
+      const p = this.path, step = Math.max(p.h, 0.01 * sc);
+      const r = this.spec.fly ? this.spec.fly.r * sc : 0;
+      for (let s = p.s; s < p.L; s += step) {
+        holderToWorld(a.h, p.curve.getPointAt(Math.min(1, s / p.L)), tmpC);
+        const d = sdfV(tmpC);
+        if (p.walk ? Math.abs(d) > p.h * 2 : d < r * 0.5 && p.L - s > p.approach + step) { this.replan(); return; }
+      }
+    } else {
+      const d = sdfV(this.pos);
+      const ok = this.mode === 'hover' ? d >= (this.spec.fly?.r ?? 0) * sc * 0.5 : Math.abs(d) < 0.02 * sc && this.perchOk({ p: this.pos, n: grad(this.pos, new THREE.Vector3()), kind: this.kindOf() });
+      if (!ok) this.replan();
+    }
+  }
+  kindOf() { const n = this.up; return n.z > 0.75 ? 'floor' : n.z < -0.75 ? 'ceil' : Math.abs(n.z) < 0.45 ? 'wall' : 'slope'; }
+  replan() {
+    const d = sdfV(this.pos);
+    if (d < -0.005 * wildScale) { this.mode = 'gone'; return; }   // a cube moved onto it: come back elsewhere
+    this.path = null;
+    this.decide();
+  }
+  update(dt, t) {
+    const sc = wildScale, len = this.spec.len * sc;
+    const a = this.anchor ? this.anchorAct() : null;
+    if (this.mode !== 'gone' && !a) this.mode = 'gone';
+    if (this.mode === 'gone') {
+      this.fade = Math.max(0, this.fade - dt * 2);
+      if (this.fade === 0 && settled && act.length && Math.random() < dt * 2) { if (this.spawn()) this.fade = 0.001; }
+      if (this.fade === 0) { this.root.visible = false; this.bubble.element.classList.remove('show'); return; }
+    } else this.fade = Math.min(1, this.fade + dt * 1.5);
+    const flying = this.mode === 'move' && !this.path.walk;
+    if (this.mode === 'move') {
+      const p = this.path;
+      const remain = p.L - p.s;
+      let want = p.speed;
+      if (p.end !== 'cruise') want = Math.min(want, Math.sqrt(p.acc * remain) + 0.03 * p.speed);   // brake gently into a stop
+      this.speed += THREE.MathUtils.clamp(want - this.speed, -p.acc * dt * 2, p.acc * dt);
+      p.s = Math.min(p.L, p.s + this.speed * dt);
+      const u = p.s / p.L;
+      holderToWorld(a.h, p.curve.getPointAt(u), this.pos);
+      const tan = p.curve.getTangentAt(u, tmpA);
+      this.dir.copy(tan);
+      if (p.walk) {   // stick to the stone: eased onto the surface, standing on its normal
+        const n = grad(this.pos, tmpN), d = sdfV(this.pos);
+        this.snap ||= new THREE.Vector3();
+        this.snap.lerp(Math.abs(d) < p.h * 3 ? tmpC.copy(n).multiplyScalar(-d) : tmpC.set(0, 0, 0), p.s < 1e-9 ? 1 : 1 - Math.exp(-dt * 12));
+        this.pos.add(this.snap);
+        this.up.lerp(n, 1 - Math.exp(-dt * 10)).normalize();
+        this.fwd.lerp(tan.addScaledVector(this.up, -tan.dot(this.up)).normalize(), 1 - Math.exp(-dt * 10)).normalize();
+      } else {
+        // flying: level, banking into turns; turning to the surface when landing or taking off
+        const prev = this.fwd.clone();
+        const pitchMax = this.spec.kind === 'bird' || this.spec.kind === 'heron' ? 0.55 : 0.8;
+        tan.z = THREE.MathUtils.clamp(tan.z, -pitchMax, pitchMax);
+        this.fwd.lerp(tan.normalize(), 1 - Math.exp(-dt * 8)).normalize();
+        const turn = new THREE.Vector3().crossVectors(prev, this.fwd).z / Math.max(dt, 1e-3);
+        this.bank = THREE.MathUtils.lerp(this.bank || 0, THREE.MathUtils.clamp(-turn * 0.18, -0.6, 0.6), 1 - Math.exp(-dt * 4));
+        const flightUp = tmpU.set(0, 0, 1).applyAxisAngle(this.fwd, this.bank);
+        let w = 0;
+        if (p.end === 'perch' && p.approach && remain < p.approach) {
+          w = 1 - remain / p.approach;
+          flightUp.lerp(p.n, w * w * (3 - 2 * w));
+          if (Math.abs(p.n.z) < 0.6 && this.spec.kind !== 'bird') this.fwd.lerp(tmpC.set(0, 0, 1).addScaledVector(p.n, -p.n.z).normalize(), w).normalize();
+        }
+        if (p.lift && p.s < p.lift) { const v = 1 - p.s / p.lift; flightUp.lerp(p.startUp, v * v * (3 - 2 * v)); }
+        this.up.lerp(flightUp.normalize(), 1 - Math.exp(-dt * 10)).normalize();
+      }
+      if (p.s >= p.L - 1e-6) this.arrive();
+    } else if (this.mode === 'perch' || this.mode === 'hover' || this.mode === 'wait') {
+      if (this.local && a) holderToWorld(a.h, this.local, this.pos);
+      this.speed = Math.max(0, this.speed - dt * 0.5 * sc);
+      if (this.mode === 'wait' && this.speed > 0 && a && !this.walker && sdf(this.pos.x + this.dir.x * 0.01 * sc, this.pos.y + this.dir.y * 0.01 * sc, this.pos.z + this.dir.z * 0.01 * sc) > (this.spec.fly?.r ?? 0) * sc * 0.6) {
+        this.pos.addScaledVector(this.dir, this.speed * dt);   // coast on while the next leg is planned
+        this.local = toLocal(a, this.pos);
+      }
+      if (this.mode !== 'wait') {
+        this.timer -= dt;
+        if (this.mode === 'perch') {
+          this.up.lerp(this.localN, 1 - Math.exp(-dt * 8)).normalize();
+          // on a wall, insects and lizards face up the wall; birds keep their heading
+          if (Math.abs(this.up.z) < 0.6 && this.spec.kind !== 'bird') this.fwd.lerp(tmpA.set(0, 0, 1).addScaledVector(this.up, -this.up.z).normalize(), 1 - Math.exp(-dt * 3)).normalize();
+        } else {
+          this.up.lerp(tmpU.set(0, 0, 1), 1 - Math.exp(-dt * 6)).normalize();
+          this.fwd.applyAxisAngle(tmpA.set(0, 0, 1), Math.sin(t * 0.7 + this.phase) * dt * 1.2);
+        }
+        if (this.timer <= 0) this.decide();
+      }
+    }
+    // orientation from forward and up
+    const right = tmpA.crossVectors(this.fwd, this.up);
+    if (right.lengthSq() > 1e-8) {
+      right.normalize();
+      const f2 = tmpU.crossVectors(this.up, right).normalize();
+      const m = new THREE.Matrix4().makeBasis(right, f2, this.up);
+      const q = new THREE.Quaternion().setFromRotationMatrix(m);
+      this.root.quaternion.slerp(q, 1 - Math.exp(-dt * 14));
+    }
+    this.animate(dt, t, flying);
+    this.root.position.copy(this.pos);
+    this.root.visible = this.fade > 0.01;
+    this.root.scale.setScalar(len * Math.max(0.001, this.fade * this.fade * (3 - 2 * this.fade)) * (a ? a.s : 1));
+    this.bubble.position.copy(this.pos).add(tmpA.set(0, 0, len * 0.7 + 0.03 * sc));
+    this.bubble.element.classList.toggle('show', this.root.visible && performance.now() < this.sayUntil);
+  }
+  animate(dt, t, flying) {
+    const P = this.parts, kind = this.spec.kind, f = this.spec.fly;
+    const perched = this.mode === 'perch' || (this.mode === 'wait' && this.lastWasPerch);
+    const wing = (lift, fold = 0) => P.wings?.forEach((w, i) => {
+      const s = w.userData.side ?? (i % 2 ? 1 : -1);
+      w.rotation.set(0, -s * lift, -s * fold, 'ZYX');   // raise first, then fold back
+      if (kind === 'bird' || kind === 'heron') w.scale.x = 1 - 0.42 * Math.min(1, fold / 1.45);   // folded wings tuck in
+    });
+    const ease = (cur, want, k = 8) => cur + (want - cur) * (1 - Math.exp(-dt * k));
+    this.lift = this.lift ?? 0; this.fold = this.fold ?? 0;
+    if (kind === 'butterfly') {
+      if (flying || this.mode === 'hover' || this.mode === 'wait' && !perched) {
+        this.flap += dt * f.flap * Math.PI * 2;
+        const glide = f.glide && Math.sin(t * 0.5 + this.phase) > 0.55;
+        const want = glide ? 0.15 : 0.3 + 0.95 * Math.sin(this.flap);
+        this.lift = glide ? ease(this.lift, want, 6) : want;
+        this.body.position.z = 0.06 * Math.sin(this.flap - 1);
+      } else {
+        const bask = Math.sin(t * 0.4 + this.phase) > 0.3;
+        this.lift = ease(this.lift, bask ? 0.1 + 0.08 * Math.sin(t * 2) : 1.35 + 0.12 * Math.sin(t * 1.5 + this.phase), 3);
+        this.body.position.z = 0;
+      }
+      wing(this.lift);
+    } else if (kind === 'bee') {
+      const air = flying || this.mode === 'hover' || (this.mode === 'wait' && !perched);
+      this.fold = ease(this.fold, air ? 0 : 0.95, 10);
+      wing(air ? 0.35 + 0.55 * Math.sin(t * 90 + this.phase) : 0.06, this.fold);
+      this.body.position.z = air ? 0.05 * Math.sin(t * 9 + this.phase) : 0;
+      if (P.leaf) P.leaf.visible = !!this.leaf && (air || this.mode === 'perch' && this.timer > 1.5);
+    } else if (kind === 'odonate') {
+      const air = flying || this.mode === 'hover' || (this.mode === 'wait' && !perched);
+      if (air) P.wings.forEach((w, i) => w.rotation.set(0, -w.userData.side * 0.4 * Math.sin(t * 70 + (i > 1 ? 1.4 : 0)), 0, 'ZYX'));
+      else if (f.flat) P.wings.forEach((w) => w.rotation.set(0, -w.userData.side * 0.08, -w.userData.side * 0.12, 'ZYX'));
+      else P.wings.forEach((w) => w.rotation.set(0, -w.userData.side * 1.35, -w.userData.side * 1.3, 'ZYX'));
+      this.body.position.z = air ? 0.03 * Math.sin(t * 4 + this.phase) : 0;
+      if (P.tail) P.tail.rotation.x = air ? 0.08 * Math.sin(t * 3) : 0;
+    } else if (kind === 'bird' || kind === 'heron') {
+      if (flying) {
+        this.flap += dt * f.flap * Math.PI * 2;
+        const glide = f.bound ? Math.sin(t * 5 + this.phase) > 0.35 : kind === 'heron' && Math.sin(t * 0.8 + this.phase) > 0.6;
+        this.fold = ease(this.fold, glide && f.bound ? 0.9 : 0, 14);
+        this.lift = glide ? ease(this.lift, f.bound ? 0 : 0.1, 10) : 0.15 + 0.85 * Math.sin(this.flap);
+      } else {
+        this.fold = ease(this.fold, 1.45, 10);
+        this.lift = ease(this.lift, 0, 10);
+      }
+      wing(this.lift, this.fold);
+      if (P.legs?.isObject3D) P.legs.rotation.x = ease(P.legs.rotation.x, flying ? -1.3 : 0, 8);
+      if (Array.isArray(P.legs)) {   // the heron walks
+        const walking = this.mode === 'move' && this.path?.walk;
+        this.stride = (this.stride || 0) + (walking ? this.speed * dt / (this.spec.len * wildScale) * 14 : 0);
+        P.legs.forEach((l, i) => { l.rotation.x = flying ? ease(l.rotation.x, -1.2, 6) : walking ? 0.35 * Math.sin(this.stride + i * Math.PI) : ease(l.rotation.x, 0, 6); });
+        if (P.neck) P.neck.position.y = 0.12 + (walking ? 0.025 * Math.sin(this.stride * 2) : 0);
+        if (P.neck) P.neck.rotation.x = ease(P.neck.rotation.x, flying ? -0.5 : 0, 4);
+      }
+      if (P.head && !flying) P.head.rotation.z = 0.6 * Math.sin(t * 0.9 + this.phase) * Math.max(0, Math.sin(t * 0.37 + this.phase));
+      else if (P.head) P.head.rotation.z = ease(P.head.rotation.z, 0, 8);
+      if (P.tail && !Array.isArray(P.tail)) P.tail.rotation.x = perched ? 0.15 * Math.max(0, Math.sin(t * 1.7 + this.phase)) : 0;
+    } else if (kind === 'bat') {
+      const air = !perched;
+      this.hang = ease(this.hang ?? 0, air ? 0 : 1, 6);
+      P.pose.rotation.x = this.hang * Math.PI / 2;
+      P.pose.position.z = 0.05 + this.hang * 0.07;
+      if (air) { this.flap += dt * f.flap * Math.PI * 2; wing(0.1 + 1.0 * Math.sin(this.flap), 0); }
+      else wing(0.5 * this.hang, 1.3 * this.hang);
+      P.wings.forEach((w) => w.scale.setScalar(1 - 0.55 * this.hang));
+    } else if (kind === 'lizard' || kind === 'squirrel') {
+      const walking = this.mode === 'move';
+      this.stride = (this.stride || 0) + (walking ? this.speed * dt / (this.spec.len * wildScale) * (kind === 'lizard' ? 22 : 12) : 0);
+      P.legs.forEach((l, i) => { l.rotation.z = walking ? 0.5 * Math.sin(this.stride + ((i + (i >> 1)) % 2) * Math.PI) : ease(l.rotation.z, 0, 6); });
+      P.tail.forEach((g, i) => {
+        if (kind === 'lizard') g.rotation.z = (walking ? 0.25 : 0.06) * Math.sin(this.stride * 0.5 + t * 1.5 - i * 0.8);
+        else g.rotation.z = 0.12 * Math.sin(t * 2.5 + this.phase - i * 0.6) * (walking ? 0.4 : 1);
+      });
+      if (kind === 'lizard') {   // push-ups while it rests
+        const bob = this.mode === 'perch' ? Math.max(0, Math.sin(t * 5 + this.phase)) * (Math.sin(t * 0.6 + this.phase) > 0.4 ? 1 : 0) : 0;
+        P.body.position.z = 0.012 * bob;
+        P.body.rotation.x = 0.12 * bob;
+        if (P.head) P.head.rotation.z = ease(P.head.rotation.z, walking ? 0 : 0.35 * Math.sin(t * 0.5 + this.phase), 4);
+      } else {   // the squirrel bounds, then sits up and looks around
+        const sit = this.mode === 'perch' && this.up.z > 0.8 && Math.sin(t * 0.45 + this.phase) > 0.1;
+        P.body.rotation.x = ease(P.body.rotation.x, sit ? -0.75 : walking ? 0.12 * Math.sin(this.stride * 2) : 0, 6);
+        P.body.position.z = walking ? 0.02 * Math.abs(Math.sin(this.stride)) : ease(P.body.position.z, sit ? 0.03 : 0, 6);
+        if (P.head) P.head.rotation.z = ease(P.head.rotation.z, walking ? 0 : 0.7 * Math.sin(t * 0.8 + this.phase), 5);
+      }
+    }
+  }
+}
+
+const fieldClock = { last: 0 };
+function updateWild(dt) {
+  for (const b of Object.values(blocks)) b.holder.updateMatrixWorld();
+  // build at most one field a frame
+  while (fieldQueue.length) {
+    const b = fieldQueue.shift();
+    if (!b.raw || fields.has(b.raw) || !b.box || b.box.isEmpty()) continue;
+    fields.set(b.raw, buildField(b));
+    break;
+  }
+  refreshActive();
+  if (settled && layoutSig !== settledSig) {   // the cubes came to rest somewhere new: check every way
+    if (settledSig) for (const w of wild) w.validate();
+    settledSig = layoutSig;
+  }
+  // plans: as many as fit in a few milliseconds
+  const t0 = performance.now();
+  while (planQueue.length && performance.now() - t0 < 4) planQueue.shift().plan();
+  const t = (performance.now() - clockStart) / 1000;
+  for (const w of wild) w.update(dt, t);
+}
+function setWild(on) {
+  wildOn = on;
+  btnWild.setAttribute('aria-pressed', on);
+  if (on && !wild.length) {
+    let leader = null;
+    for (const kind of WILD_ROSTER) {
+      const w = new Wild(kind, WILD[kind].flock ? leader : null);
+      if (WILD[kind].flock && !leader) leader = w;
+      wild.push(w);
+    }
+  }
+  wildLayer.visible = on;
+  for (const w of wild) {
+    w.bubble.element.classList.remove('show');
+    if (!on) { w.mode = 'gone'; w.fade = 0; w.path = null; w.root.visible = false; }
+  }
+  planQueue.length = 0;
+}
+btnWild.onclick = () => setWild(!wildOn);
+setWild(wildOn);
+
 // ---------- rock (T): a coarse, sandy, 3D-printed-stone surface. The texture is generated here
 // (colour in RGB, height in alpha) and projected onto the cubes from three sides (Rhino meshes carry
 // no texture coordinates); the height bends the lighting (bump mapping), so the grains catch the
@@ -3374,6 +4474,7 @@ renderer.setAnimationLoop(() => {
   const dt = Math.min(timer.getDelta(), 0.1);
   const a = 1 - Math.exp(-dt * 7);
   if (animalsOn) updateCritters(dt);
+  if (wildOn) updateWild(dt);
   if (sunOn && sunPlaying) {   // one hour of daylight per second
     sunMinutes += dt * 60;
     if (sunMinutes >= SUN_PLAY[1]) sunMinutes = SUN_PLAY[0];
