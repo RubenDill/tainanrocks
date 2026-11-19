@@ -202,6 +202,22 @@ curl -X DELETE "https://your-project.vercel.app/api/publish?block=3" -H "x-works
 - Uploads are capped at 4 MB per group (Vercel's request limit is 4.5 MB). Massing models are usually well under 1 MB.
 - Every version is kept (up to 100 per group) for the timeline, so storage grows with each publish: 8 groups × 100 versions × 200 KB is 160 MB. Check the storage your Vercel plan includes. Clear everything between workshops (see below).
 
+## Stress testing
+
+`tools/stress.mjs` checks how the site holds up with a whole class on it. It needs Node 18 or newer and nothing else. Run it from the repository folder, outside class hours: test groups show on the class screen while they exist, because preview deployments share the live Blob store.
+
+```bash
+node tools/stress.mjs viewers --users 100 --every 5 --for 120 --models
+```
+
+Many students with the screen open: every virtual viewer downloads the published models once and then polls the list every 5 s, like a browser tab. It reports failures, response times (p50/p95/p99) and how many answers came from Vercel's cache. It costs no Blob operations.
+
+```bash
+WORKSHOP_KEY=blocks-2026 node tools/stress.mjs publish --groups 8 --rounds 3 --yes
+```
+
+Many groups publishing at the same instant, as test groups `T1`…`T8` (never a real group). After each round it watches the list for up to 2 minutes and reports any group whose newest version it lost (see the note in `lib/manifest.js`), then removes the test groups. It costs about 3 Blob operations per publish and per removal (here about 100 of the 2,000 a month): without `--yes` it only prints the estimate. If it's interrupted, `node tools/stress.mjs cleanup --groups 8 --yes` removes what's left. `--url` points it at another deployment.
+
 ## Troubleshooting
 
 | Message | Fix |
