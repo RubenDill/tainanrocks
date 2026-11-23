@@ -4238,6 +4238,21 @@ const followBack = { fov: camera.fov, dir: new THREE.Vector3() };
 // the camera looks down its -Z with +Y up; an animal's head faces +Y with +Z up
 const EYE_TURN = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
 const eyePos = new THREE.Vector3(), eyeQuat = new THREE.Quaternion();
+const followPos = new THREE.Vector3(), followQuat = new THREE.Quaternion();   // the animal's view, smoothed
+// Dragging while following orbits the camera a little round a point just ahead of the animal's eyes;
+// let go and it drifts back to the animal's own view.
+const look = { yaw: 0, pitch: 0, drag: null, last: 0 };
+const LOOK_YAW = 0.45, LOOK_PITCH = 0.3;   // radians either way: about 25° and 17°
+const lookOffset = new THREE.Quaternion(), lookEuler = new THREE.Euler(0, 0, 0, 'YXZ');
+renderer.domElement.addEventListener('pointerdown', (e) => { if (following) look.drag = { x: e.clientX, y: e.clientY }; });
+addEventListener('pointermove', (e) => {
+  if (!following || !look.drag) return;
+  const k = 1.6 / Math.max(innerHeight, 300);   // a full-height drag: about 90°, before the limits
+  look.yaw = THREE.MathUtils.clamp(look.yaw - (e.clientX - look.drag.x) * k, -LOOK_YAW, LOOK_YAW);
+  look.pitch = THREE.MathUtils.clamp(look.pitch - (e.clientY - look.drag.y) * k, -LOOK_PITCH, LOOK_PITCH);
+  look.drag = { x: e.clientX, y: e.clientY };
+});
+for (const ev of ['pointerup', 'pointercancel']) addEventListener(ev, () => { if (look.drag) { look.drag = null; look.last = performance.now(); } });
 function renderFollow() {
   ctxFollow.hidden = !wildOn || !picked;
   btnFollow.setAttribute('aria-pressed', following);
@@ -4273,7 +4288,9 @@ function setFollowing(on) {
       camGoal = null;
       followBack.fov = camera.fov;
       followBack.dir.copy(camera.position).sub(controls.target).normalize();
-      camera.fov = 70;   // a wide eye
+      camera.fov = 95;   // a wide eye
+      followPos.copy(camera.position); followQuat.copy(camera.quaternion);   // ease in from where the camera is
+      look.yaw = look.pitch = 0;
       picked.body.visible = false;   // not its own head and wings in the way
     } else {
       if (picked) picked.body.visible = true;
@@ -4295,13 +4312,22 @@ function followCamera(dt) {
     head.updateWorldMatrix(true, false);
     head.localToWorld(eyePos.set(0, 0.06, 0.02));   // just in front of the face
     head.getWorldQuaternion(eyeQuat).multiply(EYE_TURN);
-    if (w.fade < 0.5 && camera.position.distanceTo(eyePos) > len * 10) {   // it came back somewhere else: go straight there
-      camera.position.copy(eyePos); camera.quaternion.copy(eyeQuat);
+    if (w.fade < 0.5 && followPos.distanceTo(eyePos) > len * 10) {   // it came back somewhere else: go straight there
+      followPos.copy(eyePos); followQuat.copy(eyeQuat);
     } else {
-      camera.position.lerp(eyePos, 1 - Math.exp(-dt * 10));
-      camera.quaternion.slerp(eyeQuat, 1 - Math.exp(-dt * 6));
+      followPos.lerp(eyePos, 1 - Math.exp(-dt * 10));
+      followQuat.slerp(eyeQuat, 1 - Math.exp(-dt * 6));
     }
   }
+  if (!look.drag && performance.now() - look.last > 1500) {   // drift back to the animal's own view
+    const k = 1 - Math.exp(-dt * 1.5);
+    look.yaw -= look.yaw * k; look.pitch -= look.pitch * k;
+  }
+  // orbit round a point a little ahead of the eyes: the view turns, and the eye swings a little with it
+  const D = len * 1.5;
+  const pivot = tmpC.set(0, 0, -D).applyQuaternion(followQuat).add(followPos);
+  camera.quaternion.copy(followQuat).multiply(lookOffset.setFromEuler(lookEuler.set(look.pitch, look.yaw, 0)));
+  camera.position.copy(pivot).add(tmpU.set(0, 0, D).applyQuaternion(camera.quaternion));
   w.bubble.element.classList.remove('show');
   const size = currentBounds.getSize(tmpA).length();
   camera.near = len * 0.02; camera.far = Math.max(size * 20, len * 500);
