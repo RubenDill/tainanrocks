@@ -3250,28 +3250,29 @@ function bird(a, { back, belly, head: hc, wing, tail: tc, bill, legs: lc = '#5b5
   return { head, wings, tail, legs };
 }
 
+// `group`: in every view but Combined, each kind keeps to that group's cube.
 const WILD = {
   bluebottle: {
-    name: 'Common bluebottle 青鳳蝶', says: ['…'], kind: 'butterfly', len: 0.09, count: 3,
+    name: 'Common bluebottle 青鳳蝶', says: ['…'], group: 4, kind: 'butterfly', len: 0.09, count: 3,
     fly: { speed: 0.3, r: 0.03, acc: 0.6, cruise: 0.85, perch: 0.15, kinds: ['floor', 'wall'], rest: [2, 5], flap: 6 },
     build: (a) => butterfly(a, { body: '#22252a', abdomen: '#d9dad2', fore: '#232528', hind: '#232528',
       foreMarks: (w, s) => blob(w, '', [s * 0.12, 0.02, 0.009], [0.11, 0.035, 0.003], { outline: false, mat: flatMat('#62d0c2'), rot: [0, 0, s * 0.15] }),
       hindMarks: (w, s) => { blob(w, '', [s * 0.07, -0.06, 0.009], [0.06, 0.04, 0.003], { outline: false, mat: flatMat('#62d0c2') }); blob(w, '', [s * 0.17, -0.16, 0.009], [0.012, 0.012, 0.003], { outline: false, mat: flatMat('#d8433a') }); } }),
   },
   carpenter: {
-    name: 'Carpenter bee 木蜂', says: ['bzz', 'bzzz…'], kind: 'bee', len: 0.04, count: 2,
+    name: 'Carpenter bee 木蜂', says: ['bzz', 'bzzz…'], group: 7, kind: 'bee', len: 0.04, count: 2,
     fly: { speed: 0.32, r: 0.022, acc: 1.0, cruise: 0.2, hover: [0.6, 2.2], perch: 0.3, kinds: ['wall', 'floor'], rest: [2, 6] },
     build: (a) => bee(a, { fur: '#1d1c22', abdomen: '#22212a', wing: '#4a3a75' }),
   },
   whiteeye: {
-    name: 'Japanese white-eye 綠繡眼', says: ['tsee', 'tsee-tsee', '♪'], kind: 'bird', len: 0.11, count: 3, flock: true,
+    name: 'Japanese white-eye 綠繡眼', says: ['tsee', 'tsee-tsee', '♪'], group: 3, kind: 'bird', len: 0.11, count: 3, flock: true,
     fly: { speed: 0.45, r: 0.035, acc: 1.3, cruise: 0.45, perch: 0.65, kinds: ['floor'], rest: [2, 6], flap: 16, bound: true },
     build: (a) => bird(a, { back: '#9cbc38', belly: '#ecebe0', head: '#a6c43c', wing: '#86a832', tail: '#86a832', bill: '#3a3a3a', billLen: 0.06, billW: 0.025,
       marks: (h, b) => { blob(b, '#f1d83a', [0, 0.16, 0.36], [0.1, 0.07, 0.08], { outline: false }); eyes(h, 0.075, 0.025, 0.07, 0.022, '#ffffff'); } }),
   },
   heron: {
     // stocky, short-necked, chestnut red with a black cap; walks the lawns slowly and freezes, neck out
-    name: 'Malayan night heron 黑冠麻鷺', says: ['oo…', '…', 'kwok'], kind: 'heron', len: 0.47,
+    name: 'Malayan night heron 黑冠麻鷺', says: ['oo…', '…', 'kwok'], group: 2, kind: 'heron', len: 0.47,
     walk: { speed: 0.05, acc: 0.15, h: 0.03, minNz: 0.85, head: 0.32, rest: [6, 16], range: [0.08, 0.3], roam: 0.35 },
     fly: { speed: 0.45, r: 0.15, acc: 0.6, cruise: 0, perch: 1, kinds: ['floor'], rest: [6, 14], flap: 3.8, chance: 0.2, outside: 1 },
     build: (a) => {
@@ -3312,7 +3313,7 @@ const WILD = {
     },
   },
   lizard: {
-    name: "Swinhoe's tree lizard 斯文豪氏攀蜥", says: ['…', '!'], kind: 'lizard', len: 0.24, count: 2,
+    name: "Swinhoe's tree lizard 斯文豪氏攀蜥", says: ['…', '!'], group: 1, kind: 'lizard', len: 0.24, count: 2,
     walk: { speed: 0.22, acc: 1.2, h: 0.016, minNz: -0.2, head: 0.03, rest: [1.5, 5], range: [0.05, 0.22], roam: 0.1 },
     build: (a) => {
       const skin = '#7a6a4c', dark = '#4a3e2c', stripe = '#e3c84a';
@@ -3345,7 +3346,7 @@ const WILD = {
     },
   },
   bat: {
-    name: 'Insectivorous bat 食蟲蝙蝠', says: ['((·))', '…', 'zzz'], kind: 'bat', len: 0.18, count: 3,
+    name: 'Insectivorous bat 食蟲蝙蝠', says: ['((·))', '…', 'zzz'], group: 5, kind: 'bat', len: 0.18, count: 3,
     fly: { speed: 0.55, r: 0.04, acc: 1.4, cruise: 0.85, perch: 0.35, kinds: ['ceil'], rest: [6, 16], flap: 11, jitter: true },
     build: (a) => {
       const fur = '#5b4535', skin = '#3b2c24';
@@ -3367,7 +3368,7 @@ const WILD = {
     },
   },
   squirrel: {
-    name: 'Red-bellied tree squirrel 赤腹松鼠', says: ['chuk!', 'chuk-chuk', '…'], kind: 'squirrel', len: 0.4,
+    name: 'Red-bellied tree squirrel 赤腹松鼠', says: ['chuk!', 'chuk-chuk', '…'], group: 6, kind: 'squirrel', len: 0.4,
     walk: { speed: 0.5, acc: 2.5, h: 0.024, minNz: -0.2, head: 0.07, rest: [1, 4], range: [0.12, 0.4], roam: 0.15 },
     build: (a) => {
       const fur = '#7a7263', belly = '#b4522c', pale = '#b3aa98';
@@ -3571,6 +3572,10 @@ function grad(p, out, e = 0.006 * wildScale) {
 const insideCube = (x, y, z) => act.some((a) => x >= a.wbox.min.x && x <= a.wbox.max.x && y >= a.wbox.min.y && y <= a.wbox.max.y && z >= a.wbox.min.z && z <= a.wbox.max.z);
 const inRegion = (x, y, z, roam) => x >= region.min.x - roam && x <= region.max.x + roam && y >= region.min.y - roam && y <= region.max.y + roam && z >= groundZ - 1e-3 && z <= region.max.z + roam * 1.5;
 const actFor = (raw) => act.find((a) => a.raw === raw);
+// While an animal plans in a view other than Combined: its group's cube, the only place it may go
+// (`region` is narrowed to that cube for the time being). Otherwise null: any cube on show.
+let homeScope = null;
+const places = () => (homeScope ? [homeScope] : act);
 
 // ---- trips: A* on a lattice around the start, then string-pulled and smoothed into a curve
 const NB = [];
@@ -3774,20 +3779,36 @@ class Wild {
   // where it is now, in the world
   anchorAct() { return this.anchor && actFor(this.anchor.raw) && this.anchor.h.visible ? actFor(this.anchor.raw) : null; }
   setAnchor(a) { this.anchor = a ? { raw: a.raw, h: a.h } : null; }
+  // Outside Combined each kind lives in its group's cube: plans are made with the world narrowed to it.
+  homeAct() { return act.find((a) => groupNumber(a.id) === this.spec.group) || null; }
+  atHome() {
+    if (view === 'combined') return true;
+    const h = this.homeAct();
+    return !!h && !!this.anchor && this.anchor.raw === h.raw;
+  }
+  scoped(fn) {
+    const home = this.homeAct();
+    if (!home) return false;
+    const keep = region.clone();
+    region.copy(home.wbox);
+    homeScope = home;
+    try { return fn(); } finally { region.copy(keep); homeScope = null; }
+  }
   // ---- choosing where to go next, and asking for a plan
   spawn() {
     if (!act.length) return false;
+    if (view !== 'combined' && !homeScope) return this.scoped(() => this.spawn());
     for (let tries = 0; tries < 30; tries++) {
-      const a = pickOf(act);
+      const a = pickOf(places());
       const fly = this.spec.fly;
       if (this.walker || (fly.kinds && Math.random() < 0.6)) {
-        const s = this.walker && Math.random() < 0.25 ? groundSample(this.spec.walk.roam * wildScale) : surfaceSample(a);
+        const s = this.walker && !homeScope && Math.random() < 0.25 ? groundSample(this.spec.walk.roam * wildScale) : surfaceSample(a);
         if (!s || !this.perchOk(s)) continue;
         this.settle(a, s.p, s.n, 'perch');
         this.timer = rand(0.5, 3);
         return true;
       }
-      const p = airSample(a, fly.r * wildScale) || (fly.outside ? outsideSample(fly.r * wildScale, 0.2 * wildScale) : null);
+      const p = airSample(a, fly.r * wildScale) || (fly.outside && !homeScope ? outsideSample(fly.r * wildScale, 0.2 * wildScale) : null);
       if (!p) continue;
       this.settle(nearestAct(p), p, tmpN.set(0, 0, 1), 'hover');
       this.timer = rand(0.3, 1.5);
@@ -3825,6 +3846,11 @@ class Wild {
   plan() {
     if (this.mode !== 'wait') return;
     if (!act.length) { this.mode = 'gone'; return; }
+    if (view !== 'combined' && !homeScope) {
+      if (!this.homeAct()) { this.mode = 'gone'; return; }
+      this.scoped(() => this.plan());
+      return;
+    }
     // one try a call (each is an A* search), so a frame never holds more than one or two
     const sc = wildScale, here = this.pos.clone();
     const flyChance = this.walker ? (this.spec.fly?.chance ?? 0) : 1;
@@ -3844,7 +3870,7 @@ class Wild {
     let target = null;
     for (let tries = 0; tries < 25 && !target; tries++) {
       const roll = Math.random();
-      const s = roll < 0.6 ? surfaceNear(here, w.range[1] * sc) : roll < 0.8 ? groundSample(w.roam * sc) : surfaceSample(pickOf(act));
+      const s = roll < 0.6 ? surfaceNear(here, w.range[1] * sc) : roll < 0.8 && !homeScope ? groundSample(w.roam * sc) : surfaceSample(pickOf(places()));
       if (!s || !this.perchOk(s)) continue;
       const d = s.p.distanceTo(here);
       if (d < w.range[0] * sc || d > w.range[1] * sc) continue;
@@ -3867,7 +3893,7 @@ class Wild {
     const wantPerch = f.kinds && (this.startle ? false : lead ? lead.lastWasPerch : Math.random() < f.perch);
     this.startle = false;
     for (let tries = 0; tries < 30 && !goal; tries++) {
-      const a = lead ? (nearestAct(lead.goal) || pickOf(act)) : Math.random() < 0.6 ? (this.anchorAct() || pickOf(act)) : pickOf(act);
+      const a = homeScope || (lead ? (nearestAct(lead.goal) || pickOf(act)) : Math.random() < 0.6 ? (this.anchorAct() || pickOf(act)) : pickOf(act));
       if (wantPerch) {
         const s = lead ? surfaceNear(lead.pos, 0.12 * sc) : surfaceSample(a);
         if (!s || !this.perchOk(s)) continue;
@@ -3878,8 +3904,8 @@ class Wild {
       } else {
         let p = null;
         if (lead) p = lead.goal.clone().add(tmpA.set(rand(-1, 1), rand(-1, 1), rand(-0.5, 0.5)).multiplyScalar(0.07 * sc));
-        else if (f.outside && Math.random() < 0.5) p = outsideSample(r, roam);
-        else p = airSample(a, r) || (Math.random() < 0.3 ? outsideSample(r, roam) : null);
+        else if (f.outside && !homeScope && Math.random() < 0.5) p = outsideSample(r, roam);
+        else p = airSample(a, r) || (!homeScope && Math.random() < 0.3 ? outsideSample(r, roam) : null);
         if (!p || sdfV(p) < r || !inRegion(p.x, p.y, p.z, roam)) continue;
         const d = p.distanceTo(here);
         if (!lead && tries < 20 && (d < 0.08 * sc || d > 0.5 * sc)) continue;
@@ -3986,7 +4012,7 @@ class Wild {
   update(dt, t) {
     const sc = wildScale, len = this.spec.len * sc;
     const a = this.anchor ? this.anchorAct() : null;
-    if (this.mode !== 'gone' && !a) this.mode = 'gone';
+    if (this.mode !== 'gone' && (!a || !this.atHome())) this.mode = 'gone';   // not its cube in this view: fade out, come back home
     if (this.mode === 'gone') {
       this.fade = Math.max(0, this.fade - dt * 2);
       if (this.fade === 0 && settled && act.length && Math.random() < dt * 2) { if (this.spawn()) this.fade = 0.001; }
