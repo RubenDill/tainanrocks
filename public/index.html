@@ -1365,6 +1365,7 @@ function layout() {
   fitShadows(bounds.clone().union(grid));
   currentBounds = bounds;
   placeGroundGrid(bounds);
+  placeGroundCompass(bounds);
   updateCuts();
   updateSunPath();
   renderContext();
@@ -2065,6 +2066,61 @@ function updateSunPath() {
   sunBall.position.copy(skyVector(p.alt, p.az).multiplyScalar(R).add(c));
 }
 
+// N, E, S and W written on the ground around the model, so the cubes' orientation reads in every
+// view (?north= turns them with the rest). Each letter lies flat and turns to stay upright for the camera.
+const groundCompass = new THREE.Group();
+groundCompass.renderOrder = 2;
+scene.add(groundCompass);
+const compassTex = {};
+for (const k of ['N', 'E', 'S', 'W']) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = 128;
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 4;
+  compassTex[k] = { canvas, tex };
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(1, 1), new THREE.MeshBasicMaterial({ map: tex, transparent: true,
+    depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
+  m.userData.key = k;
+  m.renderOrder = 2;   // over the ground grid
+  groundCompass.add(m);
+}
+function drawCompassLetters() {
+  for (const [k, { canvas, tex }] of Object.entries(compassTex)) {
+    const g = canvas.getContext('2d');
+    g.clearRect(0, 0, 128, 128);
+    g.fillStyle = k === 'N' ? '#b3261e' : '#1e232a';   // north in red, like a compass needle
+    g.globalAlpha = 0.8;
+    g.font = "800 104px 'Archivo', system-ui, sans-serif";
+    g.textAlign = 'center'; g.textBaseline = 'middle';
+    g.fillText(k, 64, 70);
+    tex.needsUpdate = true;
+  }
+}
+drawCompassLetters();
+document.fonts?.ready.then(drawCompassLetters);
+function placeGroundCompass(bounds) {
+  const c = bounds.getCenter(new THREE.Vector3()), size = bounds.getSize(new THREE.Vector3());
+  const letter = THREE.MathUtils.clamp(Math.max(size.x, size.y) * 0.08, nominal * 0.18, nominal * 0.4);   // with what's shown
+  const dirs = { N: NORTH_VEC, E: EAST_VEC, S: NORTH_VEC.clone().negate(), W: EAST_VEC.clone().negate() };
+  for (const m of groundCompass.children) {
+    const d = dirs[m.userData.key];
+    const reach = Math.abs(d.x) * size.x / 2 + Math.abs(d.y) * size.y / 2;   // the box's edge in that direction
+    m.position.set(c.x, c.y, 0).addScaledVector(d, reach + letter * 1.1);
+    m.position.z = nominal * 0.001;   // just over the ground and its grid
+    m.scale.setScalar(letter);
+  }
+}
+const camUp = new THREE.Vector3();
+function turnGroundCompass() {
+  if (!groundCompass.visible) return;
+  // The camera's up, laid on the ground, is "away from the viewer": the letters' tops point that way.
+  camUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+  if (camUp.x * camUp.x + camUp.y * camUp.y < 1e-8) return;
+  const yaw = Math.atan2(camUp.y, camUp.x) - Math.PI / 2;
+  for (const m of groundCompass.children) m.rotation.z = yaw;
+}
+
 const COMPASS_8 = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
 function renderSunPanel() {
@@ -2257,6 +2313,8 @@ function renderExposureMaps() {
   if (!expoRT) expoRT = new THREE.WebGLRenderTarget(EXPO_SIZE, EXPO_SIZE, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
   const keep = { rt: renderer.getRenderTarget(), auto: renderer.shadowMap.autoUpdate, clear: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha(), over: scene.overrideMaterial, bg: scene.background, autoClear: renderer.autoClear };
   renderer.shadowMap.autoUpdate = false;
+  const compassShown = groundCompass.visible;
+  groundCompass.visible = false;   // only the cubes cast shade
   scene.overrideMaterial = expoDepthMat;
   scene.background = null;
   renderer.autoClear = true;
@@ -2283,6 +2341,7 @@ function renderExposureMaps() {
   scene.background = keep.bg;
   renderer.shadowMap.autoUpdate = keep.auto;
   renderer.shadowMap.needsUpdate = true;
+  groundCompass.visible = compassShown;
   expoUniforms.expoC.value.copy(c);
   expoUniforms.expoR.value = R;
   expoUniforms.expoTexel.value = (2 * R) / T;
@@ -5498,6 +5557,7 @@ renderer.setAnimationLoop(() => {
   camera.near = d / 100; camera.far = d * 30; camera.updateProjectionMatrix();
   controls.update();
   sizeDots();
+  turnGroundCompass();
   renderer.render(scene, camera);
   labelRenderer.render(scene, camera);
 });
