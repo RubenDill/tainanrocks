@@ -133,7 +133,7 @@
     background: none; padding: 6px 8px; text-align: left; white-space: nowrap; }
   .menu button::before { content: ''; width: 14px; flex: none; font-weight: 700; text-align: center; }
   .menu button[aria-pressed="true"]::before { content: '✓'; }
-  #btn-copy-view { border-top: 1px solid var(--rule) !important; border-radius: 0 0 4px 4px !important; margin-top: 3px; padding-top: 8px; }
+  .menu .first-shot { border-top: 1px solid var(--rule) !important; border-radius: 0 0 4px 4px !important; margin-top: 3px; padding-top: 8px; }
   .menu kbd { order: 2; margin-left: auto; padding-left: 14px; font: inherit; font-size: 12px; color: var(--muted); }
   .keys .icon { width: 34px; height: 32px; padding: 0; display: grid; place-items: center; }
   .keys .icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -587,7 +587,9 @@
           <button data-view-named="elev-e" data-close aria-pressed="false" title="Elevation: the east side, straight on">East elevation</button>
           <button data-view-named="elev-n" data-close aria-pressed="false" title="Elevation: the north side, straight on">North elevation</button>
           <button data-view-named="elev-w" data-close aria-pressed="false" title="Elevation: the west side, straight on">West elevation</button>
+          <button id="btn-shot-ui" class="first-shot" aria-pressed="false" title="Draw the panels, buttons and labels into the image too">Include the interface</button>
           <button id="btn-copy-view" data-close title="Copy the view as an image, to paste anywhere (K)"><kbd>K</kbd> Copy as image</button>
+          <button id="btn-save-view" data-close title="Save the view as a PNG file (Shift+K)"><kbd>⇧K</kbd> Save as image</button>
         </div>
       </div>
       <div class="dd">
@@ -1242,6 +1244,16 @@ function allUpdates() {
   for (const [id, vs] of Object.entries(groupVersions)) vs.forEach((v, idx) => list.push({ id, idx, at: versionTime(v) }));
   return list.sort((a, b) => a.at - b.at || (a.id < b.id ? -1 : 1));
 }
+// The cube the timeline is about: in One by one, the one on show; otherwise null (all of them).
+function timelineFocus() {
+  return view === 'single' ? slotList.find((x) => x.key === selected) || null : null;
+}
+const inSlot = (slot, id) => id === slot.id || String(groupNumber(id) ?? id) === slot.key;
+// The updates the timeline shows and steps through: in One by one, only that cube's.
+function timelineUpdates() {
+  const focus = timelineFocus();
+  return focus ? allUpdates().filter((u) => inSlot(focus, u.id)) : allUpdates();
+}
 
 // Bring the scene in line with groupVersions and the history position. Resolves to true if anything changed.
 let syncToken = 0;
@@ -1529,6 +1541,7 @@ function setView(v, opts = {}) {
   controls.autoRotate = rotateWanted && view !== 'matrix';
   const withGroup = view === 'single' || view === 'interfaces';
   history.replaceState(null, '', `${location.search}#${view}${withGroup ? '-' + encodeURIComponent(selected) : ''}`);
+  renderHistory();   // in One by one the timeline is the cube's own
   renderGroups();
   renderInterfaces();
   renderCard();
@@ -1798,7 +1811,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'escape') { if (menuOpen()) openMenu(null); else if (following) setFollowing(false); else if (presenting) setPresenting(false); else hideCard(); }
   else if (k === 'i') setFollowing(!following);
   else if (k === 'b') setCity(!cityOn);
-  else if (k === 'k') copyView();
+  else if (k === 'k') { if (e.shiftKey) saveView(); else copyView(); }
   else if (k === 'h') setHistoryShown(!historyShown);
   else if (k === 'p') setPresenting(!presenting);
   else if (k === 'm') openManage();
@@ -1839,7 +1852,8 @@ function historyIndex(updates) {
   return i;
 }
 // One row per group: the numbered groups in order, then any other names.
-function timelineRows(updates) {
+function timelineRows(updates, focus = null) {
+  if (focus) return { rows: [{ name: focus.name, short: focus.short, color: groupColor(focus.id || focus.key) }], rowOf: () => 0 };
   const rows = [], index = {};
   for (let n = 1; n <= GROUPS; n++) { index[n] = rows.length; rows.push({ name: groupName(n), short: String(n), color: groupColor(String(n)) }); }
   for (const id of [...new Set(updates.map((u) => u.id))].sort()) {
@@ -1895,7 +1909,7 @@ function refitToBars() {
   applyInsets(); frame();
 }
 function drawHistory() {
-  const updates = allUpdates();
+  const focus = timelineFocus(), updates = timelineUpdates();
   histEl.hidden = !historyShown || updates.length < 1;
   if (histEl.hidden) return;
   const i = historyIndex(updates), u = updates[i];
@@ -1910,7 +1924,7 @@ function drawHistory() {
   document.getElementById('day-prev').disabled = days.indexOf(shown) <= 0;
   document.getElementById('day-next').disabled = days.indexOf(shown) >= days.length - 1;
 
-  const { rows, rowOf } = timelineRows(updates);
+  const { rows, rowOf } = timelineRows(updates, focus);
   const room = Math.min(130, innerHeight * 0.18);   // less on a short screen
   const rowH = Math.max(8, Math.min(14, Math.floor(room / rows.length)));
   histEl.style.setProperty('--row', `${rowH}px`);
@@ -1963,18 +1977,18 @@ function drawHistory() {
   const b = document.createElement('b');
   if (historyAt === null) {
     b.textContent = 'Live';
-    histWhen.replaceChildren(b, ` · ${updates.length} ${updates.length === 1 ? 'update' : 'updates'} so far`);
+    histWhen.replaceChildren(b, ` · ${updates.length} ${updates.length === 1 ? 'update' : 'updates'}${focus ? ` of ${focus.name}` : ''} so far`);
   } else {
     b.textContent = `Update ${i + 1} of ${updates.length}`;
-    histWhen.replaceChildren(b, ` · ${slotName(u.id)} v${u.idx + 1} · ${fmtWhen(u.at)}`);
+    histWhen.replaceChildren(b, focus ? ` · v${u.idx + 1} · ${fmtWhen(u.at)}` : ` · ${slotName(u.id)} v${u.idx + 1} · ${fmtWhen(u.at)}`);
   }
   histLive.setAttribute('aria-pressed', historyAt === null);
   histPlay.textContent = replayTimer ? '❚❚' : '▶';
   histPlay.setAttribute('aria-label', replayTimer ? 'Pause the replay' : period === 'day' ? "Replay this day's updates" : 'Replay every update from the start');
   histPlay.title = histPlay.getAttribute('aria-label');
 }
-async function goToUpdate(i) {
-  const updates = allUpdates();
+// `updates`: the list `i` counts in (the timeline's, unless said otherwise).
+async function goToUpdate(i, updates = timelineUpdates()) {
   if (!updates.length) return;
   i = Math.max(0, Math.min(updates.length - 1, i));
   historyAt = i === updates.length - 1 ? null : updates[i].at;
@@ -1990,7 +2004,7 @@ async function goToUpdate(i) {
   }
 }
 function stepHistory(d) {
-  const i = historyIndex(allUpdates()) + d;
+  const i = historyIndex(timelineUpdates()) + d;
   stopReplay();
   goToUpdate(i);
 }
@@ -2001,7 +2015,7 @@ function stopReplay() {
 }
 // Replay, one update per second: from the start (in Day, from the day's first update), or on from where it is.
 function startReplay() {
-  const updates = allUpdates();
+  const updates = timelineUpdates();
   let start = historyAt === null ? 0 : historyIndex(updates) + 1;
   if (period === 'day' && (historyAt === null || shownDay)) {
     const key = shownDay || dayKey(updates[updates.length - 1].at);
@@ -2009,7 +2023,7 @@ function startReplay() {
   }
   goToUpdate(start);
   replayTimer = setInterval(() => {
-    const ups = allUpdates();
+    const ups = timelineUpdates();
     const i = historyIndex(ups);
     if (historyAt === null || i >= ups.length - 1) return stopReplay();
     goToUpdate(i + 1);
@@ -2020,7 +2034,7 @@ function startReplay() {
 function scrubTo(clientX) {
   const r = tlPlot.getBoundingClientRect();
   const t = tlSpan[0] + Math.min(1, Math.max(0, (clientX - r.left) / r.width)) * (tlSpan[1] - tlSpan[0]);
-  const updates = allUpdates();
+  const updates = timelineUpdates();
   let i = 0;
   updates.forEach((u, k) => { if (u.at <= t) i = k; });
   if (i !== historyIndex(updates) || historyAt === null) { stopReplay(); goToUpdate(i); }
@@ -2038,7 +2052,7 @@ for (const b of periodBtns) b.onclick = () => {
   renderHistory();
 };
 function stepDay(d) {   // look at the previous or next day that has updates (what's on screen stays)
-  const updates = allUpdates();
+  const updates = timelineUpdates();
   const days = [...new Set(updates.map((u) => dayKey(u.at)))];
   const cur = historyAt === null ? updates[updates.length - 1].at : updates[historyIndex(updates)].at;
   const k = days.indexOf(shownDay || dayKey(cur)) + d;
@@ -5855,7 +5869,7 @@ function renderManage() {
       const updates = allUpdates();
       const i = updates.findIndex((u) => u.id === b.dataset.see && groupVersions[u.id][u.idx].url === b.dataset.url);
       manageEl.close();
-      if (i >= 0) { stopReplay(); goToUpdate(i); }
+      if (i >= 0) { stopReplay(); goToUpdate(i, updates); }
     };
   });
 }
@@ -5934,27 +5948,100 @@ function setNamedView(key) {
 }
 for (const b of namedBtns) b.addEventListener('click', () => setNamedView(b.dataset.viewNamed));
 
-// Copy as image (K): the 3D view as it is now, as a PNG on the clipboard; where the browser won't
-// allow that (or the page is embedded without clipboard access), it is saved as a file instead.
+// ---------- the view as an image: Copy (K) to the clipboard, Save (Shift+K) as a PNG file. The 3D
+// view as it is now; with "Include the interface", the panels, buttons and labels drawn over it (by
+// html2canvas, fetched the first time); and in One by one a strip under it saying which cube it is
+// and when that version was published.
+let shotUI = (() => { try { return localStorage.getItem('tainanrocks.shotUI') === 'on'; } catch { return false; } })();
+const btnShotUI = document.getElementById('btn-shot-ui');
+btnShotUI.setAttribute('aria-pressed', shotUI);
+btnShotUI.onclick = () => {
+  shotUI = !shotUI;
+  btnShotUI.setAttribute('aria-pressed', shotUI);
+  try { localStorage.setItem('tainanrocks.shotUI', shotUI ? 'on' : 'off'); } catch { /* this visit only */ }
+};
+let h2cLoad = null;
+const loadH2C = () => (h2cLoad ||= new Promise((res, rej) => {
+  const sc = document.createElement('script');
+  sc.src = 'https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js';
+  sc.onload = () => res(window.html2canvas);
+  sc.onerror = () => { h2cLoad = null; rej(new Error('html2canvas did not load')); };
+  document.head.append(sc);
+}));
+const shotSay = (text) => { statusNote = { until: Date.now() + 5000, text }; renderStatus(); };
+function shotCaption() {
+  const s = timelineFocus();
+  if (!s) return null;
+  const b = s.id && blocks[s.id];
+  if (!b) return { slot: s, text: `${s.name} · not published yet` };
+  const when = new Date(b.publishedAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return { slot: s, text: `${s.name} · ${b.versionCount > 1 ? `version ${b.version + 1} of ${b.versionCount} · ` : ''}published ${when}` };
+}
+let shotNote = '';
+function viewImage() {
+  renderer.render(scene, camera);   // draw it now: the frame only lasts this task
+  const gl = renderer.domElement, W = gl.width, H = gl.height, k = W / gl.clientWidth;
+  const cap = shotCaption(), band = cap ? Math.round(36 * k) : 0;
+  const out = document.createElement('canvas');
+  out.width = W; out.height = H + band;
+  const g = out.getContext('2d');
+  g.drawImage(gl, 0, 0);   // before anything else waits
+  shotNote = '';
+  const ui = !shotUI ? Promise.resolve() : loadH2C()
+    .then((h2c) => h2c(document.body, {
+      backgroundColor: null, scale: k, logging: false, x: 0, y: 0, scrollX: 0, scrollY: 0,
+      width: innerWidth, height: innerHeight, windowWidth: innerWidth, windowHeight: innerHeight,
+      ignoreElements: (el) => el === gl || el.classList?.contains('menu') || el.id === 'exit-present' || el.tagName === 'DIALOG',
+      // in its copy of the page: no page background (the 3D view is under it), and the font at its
+      // normal width (html2canvas can't draw the wide cut, and spaces the letters out instead)
+      onclone: (doc) => {
+        const st = doc.createElement('style');
+        st.textContent = 'html, body { background: transparent !important; } * { font-variation-settings: normal !important; }';
+        doc.head.append(st);
+      },
+    }))
+    .then((c) => g.drawImage(c, 0, 0, W, H))
+    .catch(() => { shotNote = ' (without the interface: it could not be drawn)'; });
+  return ui.then(() => {
+    if (cap) {   // the strip under the view: the cube, and when it was published
+      g.fillStyle = '#f6f7f5'; g.fillRect(0, H, W, band);
+      g.fillStyle = '#a9b2bb'; g.fillRect(0, H, W, Math.max(1, Math.round(k)));
+      const chip = Math.round(14 * k), pad = Math.round(14 * k), mid = H + band / 2;
+      g.fillStyle = groupColor(cap.slot.id || cap.slot.key); g.fillRect(pad, mid - chip / 2, chip, chip);
+      g.textBaseline = 'middle';
+      g.fillStyle = '#1e232a'; g.font = `600 ${Math.round(15 * k)}px Archivo, system-ui, sans-serif`;
+      g.fillText(cap.text, pad + chip + Math.round(9 * k), mid);
+      g.fillStyle = '#66707b'; g.font = `500 ${Math.round(13 * k)}px Archivo, system-ui, sans-serif`; g.textAlign = 'right';
+      g.fillText(TITLE, W - pad, mid);
+    }
+    return new Promise((res) => out.toBlob(res, 'image/png'));
+  });
+}
+function shotName() {
+  const f = timelineFocus();
+  return `${safe(TITLE)}_${f ? safe(f.name) + '_' : ''}${stamp(Date.now())}.png`;
+}
+function saveBlob(blob) {
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = shotName();
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+}
+function saveView() {
+  viewImage().then((blob) => { saveBlob(blob); shotSay(`The view was saved as ${shotName()}${shotNote}.`); });
+}
 function copyView() {
-  renderer.render(scene, camera);   // draw it now, so the canvas holds this very frame
-  const png = new Promise((res) => renderer.domElement.toBlob(res, 'image/png'));
-  const say = (text) => { statusNote = { until: Date.now() + 5000, text }; renderStatus(); };
-  const save = async () => {
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(await png);
-    a.download = `${safe(TITLE)}_view_${stamp(Date.now())}.png`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
-    say('The clipboard was out of reach, so the view was saved as an image file instead.');
-  };
-  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') { save(); return; }
+  const png = viewImage();
+  const fallback = () => png.then((blob) => { saveBlob(blob); shotSay(`The clipboard was out of reach, so the view was saved as an image file instead${shotNote}.`); });
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') { fallback(); return; }
   // the image as a promise: Safari wants the clipboard asked straight away, in the click
   navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
-    .then(() => say('The view is on the clipboard, ready to paste.'))
-    .catch(save);
+    .then(() => shotSay(`The view is on the clipboard, ready to paste${shotNote}.`))
+    .catch(fallback);
 }
 document.getElementById('btn-copy-view').addEventListener('click', copyView);
+document.getElementById('btn-save-view').addEventListener('click', saveView);
 
 const timer = new THREE.Clock();
 renderer.setAnimationLoop(() => {
