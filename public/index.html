@@ -58,6 +58,10 @@
   .context .who { min-width: 13ch; text-align: center; }
   .context .who b { display: block; font-size: 17px; font-weight: 780; font-variation-settings: 'wdth' 125; }
   .context .who small { color: var(--muted); }
+  .context .go { border: 1px solid var(--rule); background: #fff; border-radius: 5px; padding: 5px 10px; cursor: pointer;
+    font: inherit; font-weight: 650; white-space: nowrap; }
+  .context .go:hover { background: #e8ebec; }
+  .context .go[aria-pressed="true"] { background: var(--ink); border-color: var(--ink); color: var(--paper); }
 
   /* bottom: group chips on the left, display keys on the right */
   .bottom { position: fixed; bottom: 28px; left: var(--edge); right: var(--edge); display: flex; gap: 16px;
@@ -512,6 +516,12 @@
       </div>
       <small id="rain-info"></small>
     </div>
+    <div class="context" id="ctx-follow" hidden>
+      <button class="step" id="follow-prev" aria-label="Previous animal" title="Previous animal">‹</button>
+      <div class="who" aria-live="polite"><b id="follow-name"></b><small id="follow-note"></small></div>
+      <button class="step" id="follow-next" aria-label="Next animal" title="Next animal">›</button>
+      <button class="go" id="follow-go" type="button" aria-pressed="false"></button>
+    </div>
     <div class="context expopanel" id="ctx-wind" hidden>
       <div class="seg" role="group" aria-label="Wind from">
         <button type="button" data-from="N">N</button><button type="button" data-from="NE">NE</button><button type="button" data-from="E">E</button><button type="button" data-from="SE">SE</button><button type="button" data-from="S">S</button><button type="button" data-from="SW">SW</button><button type="button" data-from="W">W</button><button type="button" data-from="NW">NW</button>
@@ -586,6 +596,7 @@
           <button id="btn-wind" aria-pressed="false" title="Wind: how the air flows round and through the cubes, from the NE by default (V)"><kbd>V</kbd> Wind</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
           <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: lizards, a night heron, white-eyes, butterflies, bats, a squirrel and carpenter bees moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
+          <button id="btn-follow" aria-pressed="false" title="See through an animal's eyes: click one to pick it, or start with the first in view (I)"><kbd>I</kbd> Follow an animal</button>
         </div>
       </div>
       <div class="dd">
@@ -1695,7 +1706,7 @@ renderer.domElement.addEventListener('pointerup', (e) => {
     const bodies = [];
     for (const c of [...(animalsOn ? critters : []), ...(wildOn ? wild : [])]) if (c.root.visible) c.root.traverse((o) => { if (o.isMesh && o.userData.critter) bodies.push(o); });
     const poked = raycaster.intersectObjects(bodies, false)[0];
-    if (poked) { poked.object.userData.critter.poke(); return; }
+    if (poked) { const c = poked.object.userData.critter; c.poke(); if (wild.includes(c)) pickAnimal(c); return; }
   }
   const meshes = [];
   for (const b of Object.values(blocks)) if (b.holder.visible) b.raw.traverse((o) => { if (o.isMesh) meshes.push(o); });
@@ -1762,7 +1773,8 @@ addEventListener('keydown', (e) => {
   else if (k === 't') setRock(!rockOn);
   else if (k === 'x') setSection(!sectionOn);
   else if (k === 'g') setGrid(!gridOn);
-  else if (k === 'escape') { if (menuOpen()) openMenu(null); else if (presenting) setPresenting(false); else hideCard(); }
+  else if (k === 'escape') { if (menuOpen()) openMenu(null); else if (following) setFollowing(false); else if (presenting) setPresenting(false); else hideCard(); }
+  else if (k === 'i') setFollowing(!following);
   else if (k === 'h') setHistoryShown(!historyShown);
   else if (k === 'p') setPresenting(!presenting);
   else if (k === 'm') openManage();
@@ -4212,8 +4224,93 @@ function setWild(on) {
     if (!on) { w.mode = 'gone'; w.fade = 0; w.path = null; w.root.visible = false; }
   }
   planQueue.length = 0;
+  if (!on) { setFollowing(false); pickAnimal(null); }
 }
 btnWild.onclick = () => setWild(!wildOn);
+
+// ---------- follow an animal (I): the camera rides at its head, looking where it looks. Click an
+// animal to pick it (‹ › go through the others), then "See through its eyes"; Esc comes back out.
+const ctxFollow = document.getElementById('ctx-follow');
+const btnFollow = document.getElementById('btn-follow');
+let picked = null;       // the animal chosen
+let following = false;   // seeing through its eyes
+const followBack = { fov: camera.fov, dir: new THREE.Vector3() };
+// the camera looks down its -Z with +Y up; an animal's head faces +Y with +Z up
+const EYE_TURN = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), Math.PI / 2);
+const eyePos = new THREE.Vector3(), eyeQuat = new THREE.Quaternion();
+function renderFollow() {
+  ctxFollow.hidden = !wildOn || !picked;
+  btnFollow.setAttribute('aria-pressed', following);
+  if (ctxFollow.hidden) return;
+  document.getElementById('follow-name').textContent = picked.spec.name;
+  const same = wild.filter((w) => w.kind === picked.kind);
+  document.getElementById('follow-note').textContent = `group ${picked.spec.group}${same.length > 1 ? ` · ${same.indexOf(picked) + 1} of ${same.length}` : ''}`;
+  const go = document.getElementById('follow-go');
+  go.textContent = following ? 'Back to the overview' : 'See through its eyes';
+  go.setAttribute('aria-pressed', following);
+}
+function pickAnimal(w) {
+  if (picked && picked !== w) picked.body.visible = true;
+  picked = w;
+  if (picked && following) picked.body.visible = false;   // the camera glides over to it
+  renderFollow();
+}
+function stepAnimal(d) {
+  const shown = wild.filter((w) => w.mode !== 'gone');
+  const list = shown.length ? shown : wild;
+  if (!list.length) return;
+  const i = list.indexOf(picked);
+  pickAnimal(list[i < 0 ? 0 : (i + d + list.length) % list.length]);
+}
+function setFollowing(on) {
+  if (on && !wildOn) setWild(true);
+  if (on && !picked) picked = wild.find((w) => w.mode !== 'gone') || wild[0] || null;
+  if (!picked) on = false;
+  if (on !== following) {
+    following = on;
+    controls.enabled = !on;
+    if (on) {
+      camGoal = null;
+      followBack.fov = camera.fov;
+      followBack.dir.copy(camera.position).sub(controls.target).normalize();
+      camera.fov = 70;   // a wide eye
+      picked.body.visible = false;   // not its own head and wings in the way
+    } else {
+      if (picked) picked.body.visible = true;
+      camera.fov = followBack.fov;
+      // aim the orbit at the model again without a jump, then glide back out to the overview
+      const c = currentBounds.getCenter(new THREE.Vector3());
+      controls.target.copy(camera.position).addScaledVector(camera.getWorldDirection(new THREE.Vector3()), camera.position.distanceTo(c));
+      camera.updateProjectionMatrix();
+      frame(currentBounds, followBack.dir);
+    }
+  }
+  renderFollow();
+}
+// Every frame while following: to the picked animal's eyes, smoothed so wingbeats don't shake the view.
+function followCamera(dt) {
+  const w = picked, head = w.parts.head;
+  const len = w.spec.len * wildScale;
+  if (w.root.visible) {
+    head.updateWorldMatrix(true, false);
+    head.localToWorld(eyePos.set(0, 0.06, 0.02));   // just in front of the face
+    head.getWorldQuaternion(eyeQuat).multiply(EYE_TURN);
+    if (w.fade < 0.5 && camera.position.distanceTo(eyePos) > len * 10) {   // it came back somewhere else: go straight there
+      camera.position.copy(eyePos); camera.quaternion.copy(eyeQuat);
+    } else {
+      camera.position.lerp(eyePos, 1 - Math.exp(-dt * 10));
+      camera.quaternion.slerp(eyeQuat, 1 - Math.exp(-dt * 6));
+    }
+  }
+  w.bubble.element.classList.remove('show');
+  const size = currentBounds.getSize(tmpA).length();
+  camera.near = len * 0.02; camera.far = Math.max(size * 20, len * 500);
+  camera.updateProjectionMatrix();
+}
+btnFollow.onclick = () => setFollowing(!following);
+document.getElementById('follow-go').onclick = () => setFollowing(!following);
+document.getElementById('follow-prev').onclick = () => stepAnimal(-1);
+document.getElementById('follow-next').onclick = () => stepAnimal(1);
 setWild(wildOn);
 
 // ---------- rain (D): where the water goes. Thousands of drops fall on the cubes (straight down, or
@@ -5534,7 +5631,8 @@ renderer.setAnimationLoop(() => {
   dashMat.opacity = THREE.MathUtils.lerp(dashMat.opacity, tileGoal * 0.9, a);
   decor.visible = matrixFade > 0.01;
 
-  if (camGoal) {
+  if (following) followCamera(dt);
+  else if (camGoal) {
     const t = 1 - Math.exp(-dt * 4);
     const offset = camera.position.clone().sub(controls.target);
     const len = THREE.MathUtils.lerp(offset.length(), camGoal.dist, t);
@@ -5544,9 +5642,11 @@ renderer.setAnimationLoop(() => {
     if (controls.target.distanceTo(camGoal.target) < camGoal.dist * 1e-3 && Math.abs(len - camGoal.dist) < camGoal.dist * 1e-3 &&
         dir.angleTo(camGoal.dir) < 1e-3) camGoal = null;
   }
-  const d = camera.position.distanceTo(controls.target);
-  camera.near = d / 100; camera.far = d * 30; camera.updateProjectionMatrix();
-  controls.update();
+  if (!following) {
+    const d = camera.position.distanceTo(controls.target);
+    camera.near = d / 100; camera.far = d * 30; camera.updateProjectionMatrix();
+    controls.update();
+  }
   sizeDots();
   turnGroundCompass();
   renderer.render(scene, camera);
