@@ -373,6 +373,44 @@
     .keys .icon { width: 30px; height: 28px; }
     .keys .icon svg { width: 16px; height: 16px; }
   }
+  /* phones on their side: little height, enough width. One slim row along the top (title, tabs)
+     and one along the bottom (chips, buttons), with the panels at the side as on a big screen. */
+  @media (max-height: 480px) and (orientation: landscape) {
+    :root { --cell: 26px; --gap: 3px; --edge: 12px; }
+    .top { top: 8px; gap: 6px 12px; flex-wrap: nowrap; }
+    .bottom { bottom: 8px; gap: 6px 12px; }
+    .title { max-width: min(56ch, 45vw); }
+    .title h1 { font-size: 16px; }
+    .title p { margin-top: 2px; font-size: 11px; }
+    .controls { width: auto; align-items: flex-end; gap: 5px; }
+    .views { padding: 2px; }
+    .views button { flex: none; padding: 4px 8px 3px; font-size: 12px; }
+    .context { padding: 4px 8px; gap: 8px; font-size: 12px; border-radius: 6px; }
+    .context input[type=range] { width: min(160px, 25vw); }
+    .context .step { width: 24px; height: 24px; font-size: 14px; }
+    .context .who { min-width: 10ch; }
+    .context .who b { font-size: 13px; }
+    .card { width: min(300px, 45vw); max-height: calc(100vh - 150px); overflow-y: auto; }   /* clear of the bottom bar */
+    .card h2 { font-size: 15px; }
+    .card dl { font-size: 12px; gap: 1px 10px; }
+    .cell b { font-size: 12px; }
+    .cell[aria-current="true"] { outline-width: 2px; outline-offset: 2px; }
+    .left { gap: 4px; }
+    .credits img { height: 14px; }
+    .credits .x { font-size: 11px; }
+    .keys { flex: 0 1 auto; }
+    .kbar { gap: 4px; flex-wrap: nowrap; }
+    .dd-toggle { padding: 3px 6px; font-size: 12px !important; }
+    .keys .icon { width: 26px; height: 24px; }
+    .keys .icon svg { width: 14px; height: 14px; }
+    .menu { min-width: 160px; max-height: calc(100vh - 60px); overflow-y: auto; }
+    .menu button { padding: 4px 8px; font-size: 13px; }
+    /* Interfaces: the panel on the right, as on a big screen, and the bottom bar stays */
+    .sheet { left: auto; width: min(420px, 46vw); top: var(--sheet-top, 60px); padding: 10px 12px; }
+    .sheet h2 { font-size: 16px; }
+    body[data-view="interfaces"] .keys { display: block; }
+    body[data-view="interfaces"] .credits { display: flex; }
+  }
   @media (prefers-reduced-motion: reduce) { .cell.pulse::after, .label.pulse span { animation: none; } }
 </style>
 <script>
@@ -2658,11 +2696,12 @@ const faceTitle = (c) => (c.a === 2 ? (c.side ? 'Top' : 'Bottom') : SIDE_NAMES[c
 
 // Where the 3D view has to stay clear of the panel (right on wide screens, bottom on phones).
 // In Interfaces the model gets the space left of the panel, between the title and the bottom bar
-// (on phones: between the controls and the panel underneath).
+// (on phones: between the controls and the panel underneath; on a phone on its side, as on a big screen).
+const sideways = matchMedia('(max-height: 480px) and (orientation: landscape)');   // same as the CSS
 function viewInsets() {
   if (view !== 'interfaces' || presenting || sheetEl.hidden) return { right: 0, bottom: 0, top: 0 };
   const panel = sheetEl.getBoundingClientRect();
-  if (innerWidth > 760) {
+  if (innerWidth > 760 || sideways.matches) {
     return { right: innerWidth - panel.left + 8, top: document.querySelector('.title').getBoundingClientRect().bottom + 8,
       bottom: innerHeight - document.querySelector('.bottom').getBoundingClientRect().top + 8 };
   }
