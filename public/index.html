@@ -596,6 +596,7 @@
           <button id="btn-wind" aria-pressed="false" title="Wind: how the air flows round and through the cubes, from the NE by default (V)"><kbd>V</kbd> Wind</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
           <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: lizards, a night heron, white-eyes, butterflies, bats, a squirrel, carpenter bees and earthworms moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
+          <button id="btn-city" aria-pressed="false" title="A Tainan street round the model: low-rise shophouses, a temple, trees and wires, and paving underfoot (B)"><kbd>B</kbd> City</button>
           <button id="btn-follow" aria-pressed="false" title="See through an animal's eyes: click one to pick it, or start with the first in view (I)"><kbd>I</kbd> Follow an animal</button>
         </div>
       </div>
@@ -1415,6 +1416,7 @@ function layout() {
   currentBounds = bounds;
   placeGroundGrid(bounds);
   placeGroundCompass(bounds);
+  placeCity(bounds);
   updateCuts();
   updateSunPath();
   renderContext();
@@ -1775,6 +1777,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'g') setGrid(!gridOn);
   else if (k === 'escape') { if (menuOpen()) openMenu(null); else if (following) setFollowing(false); else if (presenting) setPresenting(false); else hideCard(); }
   else if (k === 'i') setFollowing(!following);
+  else if (k === 'b') setCity(!cityOn);
   else if (k === 'h') setHistoryShown(!historyShown);
   else if (k === 'p') setPresenting(!presenting);
   else if (k === 'm') openManage();
@@ -2171,6 +2174,224 @@ function turnGroundCompass() {
   for (const m of groundCompass.children) m.rotation.z = yaw;
 }
 
+// ---------- city (B): a Tainan street round the model, very loosely. A panorama painted once on a
+// canvas (hazy subtropical sky; low-rise concrete shophouses with arcades, iron-grilled balconies,
+// water tanks and tin sheds on the roofs, vertical shop signs; a temple roof, palms and banyans,
+// poles and wires; a few towers in the haze) is the background, and concrete paving lies under the
+// cubes, fading out into it. Only a backdrop: the sun, shadows, exposure, rain and wind ignore it.
+let cityOn = params.get('city') === '1';
+const btnCity = document.getElementById('btn-city');
+const BOARD = scene.background;
+let cityTex = null;
+function seeded(seed) {   // mulberry32: the same street every time
+  return () => { seed |= 0; seed = seed + 0x6D2B79F5 | 0; let t = Math.imul(seed ^ seed >>> 15, 1 | seed); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; };
+}
+function paintCity() {
+  const W = Math.min(4096, renderer.capabilities.maxTextureSize), H = W / 2, HZ = H / 2, DEG = W / 360;
+  const cv = document.createElement('canvas');
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  const rnd = seeded(7), r = (a, b) => a + rnd() * (b - a), pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  const mix = (c1, c2, t) => {   // '#rrggbb' blend
+    const p = (c, i) => parseInt(c.slice(i, i + 2), 16);
+    return '#' + [1, 3, 5].map((i) => Math.round(p(c1, i) + (p(c2, i) - p(c1, i)) * t).toString(16).padStart(2, '0')).join('');
+  };
+  const wrap = (x, w, fn) => { fn(x); if (x + w > W) fn(x - W); if (x < 0) fn(x + W); };   // round the seam
+  const HAZE = '#e4e8e6';
+  // sky: blue overhead to a pale, hazy horizon; a few soft clouds
+  let sky = g.createLinearGradient(0, 0, 0, HZ);
+  sky.addColorStop(0, '#8fb6d6'); sky.addColorStop(0.55, '#bcd3e2'); sky.addColorStop(1, HAZE);
+  g.fillStyle = sky; g.fillRect(0, 0, W, HZ);
+  for (let i = 0; i < 26; i++) {
+    const x = r(0, W), y = HZ - r(6, 40) * DEG, w = r(8, 26) * DEG, h = w * r(0.12, 0.22);
+    wrap(x - w, w * 2, (X) => {
+      const cg = g.createRadialGradient(X + w, y, 0, X + w, y, w);
+      cg.addColorStop(0, 'rgba(255,255,255,0.55)'); cg.addColorStop(1, 'rgba(255,255,255,0)');
+      g.save(); g.translate(X + w, y); g.scale(1, h / w); g.translate(-(X + w), -y);
+      g.fillStyle = cg; g.beginPath(); g.arc(X + w, y, w, 0, Math.PI * 2); g.fill(); g.restore();
+    });
+  }
+  // the ground beyond the paving: street grey, darker towards the feet
+  const gr = g.createLinearGradient(0, HZ, 0, H);
+  gr.addColorStop(0, '#a3a39d'); gr.addColorStop(0.08, '#8d8c86'); gr.addColorStop(1, '#6d6c68');
+  g.fillStyle = gr; g.fillRect(0, HZ, W, H - HZ);
+
+  const FACADES = ['#d9d2c4', '#cfc8bb', '#e2dccf', '#c9c4bc', '#d8cdc4', '#c7cfc8', '#e6dfd3', '#bfc3c4', '#d6c2b5', '#c4b8a6'];
+  const SIGNS = ['#d63a2f', '#f2c230', '#2f6fc2', '#ffffff', '#2c9a5a', '#f08a24', '#7a3fa0'];
+  const box = (x, y, w, h, c) => { g.fillStyle = c; g.fillRect(x, y, w, h); };
+  function building(x, w, h, haze, near) {
+    const base = HZ, top = base - h, fac = mix(pick(FACADES), HAZE, haze);
+    wrap(x, w, (X) => {
+      box(X, top, w, h, fac);
+      if (!near && haze > 0.6) return;
+      const fl = Math.max(3, h / r(5, 6.5));   // storeys
+      const dark = mix('#4a4f55', HAZE, haze), grille = mix('#2e3236', HAZE, haze);
+      for (let y = base - fl * (near ? 1.25 : 1); y > top + fl * 0.4; y -= fl) {
+        box(X, y, w, Math.max(1, fl * 0.06), mix(fac, '#000000', 0.12));   // floor line
+        const n = Math.max(1, Math.round(w / (fl * 1.1)));
+        for (let k = 0; k < n; k++) {
+          const wx = X + (k + 0.18) * w / n, ww = w / n * 0.64, wy = y - fl * 0.72, wh = fl * 0.5;
+          box(wx, wy, ww, wh, dark);
+          if (near && rnd() < 0.55) {   // an iron cage on the window: a grille, a little proud of the wall
+            g.strokeStyle = grille; g.lineWidth = Math.max(1, ww / 22);
+            for (let q = 0; q <= 6; q++) { g.beginPath(); g.moveTo(wx + q * ww / 6, wy - fl * 0.06); g.lineTo(wx + q * ww / 6, wy + wh + fl * 0.06); g.stroke(); }
+            box(wx - ww * 0.04, wy + wh, ww * 1.08, fl * 0.07, grille);
+          }
+          if (near && rnd() < 0.25) box(wx + ww * 0.6, wy + wh * 0.62, ww * 0.34, wh * 0.3, mix('#e9e9e4', HAZE, haze));   // AC unit
+        }
+      }
+      if (near) {
+        box(X, base - fl * 1.05, w, fl * 1.05, mix('#3c3f43', HAZE, haze));   // the arcade (騎樓): shade under the first floor
+        for (let k = 0; k <= Math.round(w / fl); k++) box(X + k * w / Math.round(w / fl) - fl * 0.07, base - fl * 1.05, fl * 0.14, fl * 1.05, fac);
+        if (rnd() < 0.85) {   // vertical shop signs down the front
+          const sw = Math.max(4, w * r(0.14, 0.22)), sh = h * r(0.35, 0.6), sx = X + w * r(0.05, 0.75), sy = base - fl * 1.2 - sh;
+          const sc = mix(pick(SIGNS), HAZE, haze * 0.6);
+          box(sx, sy, sw, sh, sc);
+          const ink = sc === '#ffffff' ? '#d63a2f' : '#ffffff';
+          for (let c = sy + sw * 0.3; c < sy + sh - sw * 0.6; c += sw * 1.05) box(sx + sw * 0.22, c, sw * 0.56, sw * 0.62, mix(ink, sc, 0.25));   // the characters, as blocks
+        }
+      }
+      // on the roof: a water tank or two, and often a tin shed added on top
+      const rc = mix('#9aa3a8', HAZE, haze);
+      if (rnd() < 0.7) { const tw = Math.min(w * 0.25, fl * 0.9); box(X + w * r(0.1, 0.6), top - tw * 0.8, tw, tw * 0.8, mix(pick(['#3d6fb0', '#c8ccce', '#d4d0c0']), HAZE, haze)); }
+      if (rnd() < 0.5) {
+        const sx = X + w * r(0, 0.3), sw = w * r(0.4, 0.7), sh = fl * 0.8;
+        g.fillStyle = mix(pick(['#7fa3b8', '#a9b3b8', '#6f8f9e']), HAZE, haze);
+        g.beginPath(); g.moveTo(sx, top); g.lineTo(sx, top - sh); g.lineTo(sx + sw, top - sh * 0.6); g.lineTo(sx + sw, top); g.fill();
+      }
+      box(X, top - Math.max(1, fl * 0.12), w, Math.max(1, fl * 0.12), rc);   // parapet
+    });
+  }
+  function temple(x, w, h) {
+    const base = HZ, wall = h * 0.5;
+    wrap(x - w * 0.15, w * 1.3, (X0) => {
+      const X = X0 + w * 0.15;
+      box(X, base - wall, w, wall, '#b8402f');
+      for (let k = 1; k < 4; k++) box(X + k * w / 4 - w * 0.02, base - wall, w * 0.04, wall, '#8e2d22');
+      box(X + w * 0.38, base - wall * 0.75, w * 0.24, wall * 0.75, '#6b1f18');   // door
+      // the roof: curving up into swallowtail ridge ends
+      g.fillStyle = '#d8822e';
+      g.beginPath();
+      g.moveTo(X - w * 0.12, base - wall);
+      g.quadraticCurveTo(X + w * 0.5, base - wall - h * 0.18, X + w * 1.12, base - wall);
+      g.lineTo(X + w * 1.02, base - wall - h * 0.28);
+      g.quadraticCurveTo(X + w * 0.5, base - wall - h * 0.36, X - w * 0.02, base - wall - h * 0.28);
+      g.closePath(); g.fill();
+      g.strokeStyle = '#2f7a55'; g.lineWidth = Math.max(2, h * 0.04);
+      g.beginPath(); g.moveTo(X - w * 0.1, base - wall - h * 0.5);
+      g.quadraticCurveTo(X + w * 0.5, base - wall - h * 0.3, X + w * 1.1, base - wall - h * 0.5); g.stroke();   // ridge, tips up
+      box(X + w * 0.46, base - wall - h * 0.5, w * 0.08, h * 0.12, '#f2c230');
+    });
+  }
+  function palm(x, h) {
+    const base = HZ + r(0, 0.4) * DEG;
+    wrap(x - h * 0.5, h, (X0) => {
+      const X = X0 + h * 0.5;
+      g.strokeStyle = '#7c6a55'; g.lineWidth = Math.max(2, h * 0.035);
+      g.beginPath(); g.moveTo(X, base); g.quadraticCurveTo(X + h * 0.05, base - h * 0.5, X + h * 0.02, base - h); g.stroke();
+      g.strokeStyle = '#3f6b3a'; g.lineWidth = Math.max(2, h * 0.03);
+      for (let k = 0; k < 9; k++) {
+        const a = -Math.PI / 2 + (k - 4) * 0.42, L = h * r(0.25, 0.33);
+        g.beginPath(); g.moveTo(X + h * 0.02, base - h);
+        g.quadraticCurveTo(X + Math.cos(a) * L * 0.6, base - h + Math.sin(a) * L * 0.4 - L * 0.15, X + Math.cos(a) * L, base - h + Math.sin(a) * L * 0.2 + L * 0.35);
+        g.stroke();
+      }
+    });
+  }
+  function canopy(x, w, h) {   // a banyan, or any round street tree
+    const base = HZ + r(0, 0.4) * DEG;
+    wrap(x - w, w * 2, (X0) => {
+      const X = X0 + w;
+      box(X - w * 0.06, base - h * 0.45, w * 0.12, h * 0.45, '#5f4f3f');
+      for (let k = 0; k < 7; k++) {
+        g.fillStyle = pick(['#4d7a42', '#5a8a4a', '#43703b', '#6a9653']);
+        g.beginPath(); g.ellipse(X + r(-0.6, 0.6) * w, base - h * r(0.55, 0.85), w * r(0.35, 0.55), h * r(0.2, 0.3), 0, 0, Math.PI * 2); g.fill();
+      }
+    });
+  }
+  // far: a hazy skyline, with a few towers
+  for (let x = 0; x < W;) { const w = r(1.2, 4) * DEG; building(x, w, r(2, 6) * DEG, 0.75, false); x += w * r(0.7, 1); }
+  for (let i = 0; i < 4; i++) building(r(0, W), r(2, 3.5) * DEG, r(11, 17) * DEG, 0.62, false);
+  // middle
+  for (let x = 0; x < W;) { const w = r(2, 5) * DEG; if (rnd() < 0.85) building(x, w, r(4, 11) * DEG, 0.42, false); x += w * r(0.8, 1.1); }
+  // near: shophouses, narrow and tall, shoulder to shoulder; now and then a temple or a gap with trees
+  for (let x = 0; x < W;) {
+    const roll = rnd();
+    if (roll < 0.05) { const w = r(10, 14) * DEG; temple(x, w, r(8, 11) * DEG); x += w * 1.3; continue; }
+    if (roll < 0.12) { canopy(x + 3 * DEG, r(4, 6) * DEG, r(8, 13) * DEG); x += r(5, 8) * DEG; continue; }
+    const w = r(2.6, 5) * DEG; building(x, w, r(10, 22) * DEG, 0.08, true); x += w;
+  }
+  for (let i = 0; i < 16; i++) palm(r(0, W), r(9, 16) * DEG);
+  for (let i = 0; i < 10; i++) canopy(r(0, W), r(3, 5) * DEG, r(7, 11) * DEG);
+  // utility poles, and the wires sagging between them
+  const poles = [];
+  for (let x = r(0, 20) * DEG; x < W; x += r(14, 24) * DEG) poles.push([x, r(13, 17) * DEG]);
+  g.strokeStyle = '#3a3c3e';
+  for (const [x, h] of poles) wrap(x, 2, (X) => { g.lineWidth = Math.max(2, h * 0.025); g.beginPath(); g.moveTo(X, HZ + 0.5 * DEG); g.lineTo(X, HZ - h); g.stroke(); box(X - h * 0.12, HZ - h * 0.93, h * 0.24, Math.max(2, h * 0.02), '#3a3c3e'); });
+  g.lineWidth = Math.max(1, W / 3000);
+  for (let i = 0; i < poles.length; i++) {
+    const [x1, h1] = poles[i], [x2r, h2] = poles[(i + 1) % poles.length], x2 = x2r < x1 ? x2r + W : x2r;
+    for (const k of [-0.1, 0, 0.1]) wrap(x1, x2 - x1, (X) => {
+      const y1 = HZ - h1 * 0.93, y2 = HZ - h2 * 0.93;
+      g.beginPath(); g.moveTo(X + k * h1, y1); g.quadraticCurveTo(X + (x2 - x1) / 2, (y1 + y2) / 2 + r(1, 2.5) * DEG, X + (x2 - x1) + k * h2, y2); g.stroke();
+    });
+  }
+  // a band of haze on the horizon ties it together
+  const hz = g.createLinearGradient(0, HZ - 3 * DEG, 0, HZ + 1.5 * DEG);
+  hz.addColorStop(0, 'rgba(228,232,230,0)'); hz.addColorStop(0.7, 'rgba(228,232,230,0.35)'); hz.addColorStop(1, 'rgba(228,232,230,0)');
+  g.fillStyle = hz; g.fillRect(0, HZ - 3 * DEG, W, 4.5 * DEG);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.mapping = THREE.EquirectangularReflectionMapping;
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+// paving: square concrete slabs, each a shade apart, fading out into the panorama's street
+function paintPaving() {
+  const N = 512, cv = document.createElement('canvas');
+  cv.width = cv.height = N;
+  const g = cv.getContext('2d'), rnd = seeded(3), T = N / 4;
+  for (let i = 0; i < 4; i++) for (let j = 0; j < 4; j++) {
+    const v = Math.round(170 + rnd() * 9);
+    g.fillStyle = `rgb(${v},${v - 3},${v - 8})`; g.fillRect(i * T, j * T, T, T);
+    for (let k = 0; k < 160; k++) { const d = rnd() * 10 - 5; g.fillStyle = `rgba(${v + d},${v + d - 3},${v + d - 8},0.6)`; g.fillRect(i * T + rnd() * T, j * T + rnd() * T, 2, 2); }
+  }
+  g.fillStyle = '#9c988f';
+  for (let k = 0; k <= 4; k++) { g.fillRect(k * T - 1.5, 0, 3, N); g.fillRect(0, k * T - 1.5, N, 3); }
+  const map = new THREE.CanvasTexture(cv);
+  map.wrapS = map.wrapT = THREE.RepeatWrapping;
+  map.colorSpace = THREE.SRGBColorSpace;
+  map.anisotropy = Math.min(8, renderer.capabilities.getMaxAnisotropy());
+  const fade = document.createElement('canvas');
+  fade.width = fade.height = 256;
+  const f = fade.getContext('2d'), rg = f.createRadialGradient(128, 128, 0, 128, 128, 128);
+  rg.addColorStop(0, '#fff'); rg.addColorStop(0.55, '#fff'); rg.addColorStop(1, '#000');
+  f.fillStyle = rg; f.fillRect(0, 0, 256, 256);
+  return { map, alpha: new THREE.CanvasTexture(fade) };
+}
+const PAVING_R = 30, SLAB = 0.3;   // metres: a 60 m round of 30 cm slabs
+const paving = new THREE.Mesh(new THREE.CircleGeometry(PAVING_R, 96), new THREE.MeshLambertMaterial({ color: '#ffffff', transparent: true, depthWrite: false }));
+paving.renderOrder = -1;   // under the shadows, the grid and the letters
+paving.visible = false;
+scene.add(paving);
+function placeCity(bounds) {
+  const c = bounds.getCenter(new THREE.Vector3());
+  paving.position.set(c.x, c.y, -Math.max(0.0005, nominal * 0.002));
+}
+function setCity(on) {
+  cityOn = on;
+  btnCity.setAttribute('aria-pressed', on);
+  if (on && !cityTex) {
+    cityTex = paintCity();
+    const { map, alpha } = paintPaving();
+    map.repeat.set(PAVING_R * 2 / (SLAB * 4), PAVING_R * 2 / (SLAB * 4));
+    paving.material.map = map; paving.material.alphaMap = alpha; paving.material.needsUpdate = true;
+  }
+  scene.background = on ? cityTex : BOARD;
+  scene.backgroundRotation.set(Math.PI / 2, 0, 0);   // the panorama is painted Y-up; this world is Z-up
+  paving.visible = on;
+}
+btnCity.onclick = () => setCity(!cityOn);
+
 const COMPASS_8 = ['north', 'north-east', 'east', 'south-east', 'south', 'south-west', 'west', 'north-west'];
 const hhmm = (m) => `${String(Math.floor(m / 60)).padStart(2, '0')}:${String(Math.floor(m % 60)).padStart(2, '0')}`;
 function renderSunPanel() {
@@ -2363,8 +2584,8 @@ function renderExposureMaps() {
   if (!expoRT) expoRT = new THREE.WebGLRenderTarget(EXPO_SIZE, EXPO_SIZE, { minFilter: THREE.NearestFilter, magFilter: THREE.NearestFilter, generateMipmaps: false });
   const keep = { rt: renderer.getRenderTarget(), auto: renderer.shadowMap.autoUpdate, clear: renderer.getClearColor(new THREE.Color()), alpha: renderer.getClearAlpha(), over: scene.overrideMaterial, bg: scene.background, autoClear: renderer.autoClear };
   renderer.shadowMap.autoUpdate = false;
-  const compassShown = groundCompass.visible;
-  groundCompass.visible = false;   // only the cubes cast shade
+  const compassShown = groundCompass.visible, pavingShown = paving.visible;
+  groundCompass.visible = paving.visible = false;   // only the cubes cast shade
   scene.overrideMaterial = expoDepthMat;
   scene.background = null;
   renderer.autoClear = true;
@@ -2392,6 +2613,7 @@ function renderExposureMaps() {
   renderer.shadowMap.autoUpdate = keep.auto;
   renderer.shadowMap.needsUpdate = true;
   groundCompass.visible = compassShown;
+  paving.visible = pavingShown;
   expoUniforms.expoC.value.copy(c);
   expoUniforms.expoR.value = R;
   expoUniforms.expoTexel.value = (2 * R) / T;
@@ -5716,6 +5938,7 @@ if (rockOn) setRock(true);
 document.getElementById('color-name').textContent = MODE_NAMES[mode];
 setView(view);
 if (gridOn) setGrid(true);
+if (cityOn) setCity(true);
 snapCamera();
 from = view;
 poll();
