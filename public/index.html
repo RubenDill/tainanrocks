@@ -291,7 +291,8 @@
     border-radius: 10px; font: 700 13px/1.15 'Archivo', system-ui, sans-serif; white-space: nowrap; box-shadow: 0 2px 0 rgba(30,35,42,.2); }
 
   /* interfaces panel (right of the 3D view; under it on phones) */
-  .sheet { position: fixed; right: var(--edge); width: min(560px, 46vw); top: var(--sheet-top, 150px); bottom: var(--sheet-bottom, 120px);
+  .top, .bottom { z-index: 3; }   /* their menus and panels open over the interfaces sheet */
+  .sheet { position: fixed; z-index: 2; right: var(--edge); width: min(560px, 46vw); top: var(--sheet-top, 150px); bottom: var(--sheet-bottom, 120px);
     overflow: auto; background: #fff; border: 1px solid var(--rule); border-radius: 8px; padding: 16px 18px; }
   .sheet[hidden] { display: none; }
   .sheet header { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; }
@@ -326,12 +327,15 @@
     background: var(--c); box-shadow: 0 0 0 1px rgba(30,35,42,.25); }
   .key.touch { background: #c9ced3; }
   .key.open { background: repeating-linear-gradient(135deg, #b3261e 0 2px, #fff 2px 6px); }
-  .sheet .print { border: 1px solid var(--rule); background: var(--paper); border-radius: 4px; padding: 5px 12px; cursor: pointer; flex: none; }
+  .sheet .print, .sheet .tool { border: 1px solid var(--rule); background: var(--paper); border-radius: 4px; padding: 5px 12px; cursor: pointer; flex: none; font: inherit; font-size: 14px; }
+  .sheet .print:hover, .sheet .tool:hover { background: #e8ebec; }
+  .sheet .tools { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; flex: none; }
+  .sheet .shot-foot { margin-top: 12px; padding-top: 8px; border-top: 1px solid #eceff1; font-size: 12.5px; color: var(--muted); }
   @media print {
     html, body { height: auto; overflow: visible; background: #fff; }
     #view, .top, .bottom { display: none !important; }
     .sheet { position: static; width: auto; border: 0; padding: 0; overflow: visible; }
-    .sheet .print, .sheet .faces { display: none; }
+    .sheet .print, .sheet .tools, .sheet .faces { display: none; }
     .sheet .drawing canvas { max-height: none; width: 70%; }
   }
 
@@ -3007,8 +3011,10 @@ function renderInterfaces() {
   const slot = slotList.find((x) => x.key === selected);
   const g = slot && slot.id && blocks[slot.id];
   const when = historyAt === null ? '' : ` at ${clock(historyAt)}`;
-  let html = `<header><h2>${esc(slot ? slot.name : '')} · interfaces${when}</h2><button class="print" type="button">Print</button></header>`;
   const list = g ? contacts(slot.id) : [];
+  const tools = list.length ? `<button class="tool" type="button" data-shot="copy" title="Copy this face's panel as an image (then pick the next face and copy again)">Copy image</button>
+    <button class="tool" type="button" data-shot="zip" title="Save the panels of all ${list.length} faces as images, in a .zip">Save all</button>` : '';
+  let html = `<header><h2>${esc(slot ? slot.name : '')} · interfaces${when}</h2><div class="tools">${tools}<button class="print" type="button">Print</button></div></header>`;
   if (!g) {
     html += `<p class="empty">${esc(slot ? slot.name : 'This group')} hasn't published ${historyAt === null ? 'yet' : 'by then'}.</p>`;
   } else if (!list.length) {
@@ -3024,10 +3030,22 @@ function renderInterfaces() {
         return `<button type="button" role="tab" data-face="${i}" aria-selected="${i === faceSel}"><span class="key" style="--c:${esc(d.colH)}"></span>
           <b>${faceTitle(c)} · ${esc(nameOf(c.hid))}</b><small>${pct(d.open, d.face)} voids connect</small></button>`;
       }).join('')}</div>`;
-    const c = list[faceSel], d = drawings[faceSel];
-    const nameG = slot.name, nameH = nameOf(c.hid);
+    html += faceDetailHtml(slot, list[faceSel], drawings[faceSel]);
+  }
+  sheetEl.innerHTML = html;
+  if (list.length) sheetEl.querySelector('.drawing').prepend(drawings[faceSel].canvas);
+  sheetEl.querySelector('.print').onclick = () => print();
+  sheetEl.querySelector('[data-shot="copy"]')?.addEventListener('click', () => copyFacePanel(slot, list, drawings, faceSel));
+  sheetEl.querySelector('[data-shot="zip"]')?.addEventListener('click', (e) => saveFacePanels(slot, list, drawings, e.currentTarget));
+  sheetEl.querySelectorAll('[data-face]').forEach((b) => { b.onclick = () => { faceSel = Number(b.dataset.face); renderInterfaces(); }; });
+  applyInsets();
+}
+const ifaceNameOf = (id) => slotList.find((x) => x.id === id)?.name || id;
+// One face's panel: the heading, its drawing (put in afterwards) and its numbers.
+function faceDetailHtml(slot, c, d) {
+    const nameG = slot.name, nameH = ifaceNameOf(c.hid);
     const voidG = d.open + d.hOnly, voidH = d.open + d.gOnly;   // each side's open area on this face
-    html += `<h3>${faceTitle(c)} face ↔ ${esc(nameH)}</h3>
+    return `<h3>${faceTitle(c)} face ↔ ${esc(nameH)}</h3>
       <div class="detail">
         <figure class="drawing"><figcaption>Seen from ${SEEN_FROM[c.a]} · ${fmtLen(d.w)} × ${fmtLen(d.h)}${gridOn ? ' · grid 5&nbsp;cm' : ''}</figcaption></figure>
         <div class="stats">
@@ -3041,14 +3059,10 @@ function renderInterfaces() {
           </ul>
         </div>
       </div>`;
-  }
-  sheetEl.innerHTML = html;
-  if (list.length) sheetEl.querySelector('.drawing').prepend(drawings[faceSel].canvas);
-  sheetEl.querySelector('.print').onclick = () => print();
-  sheetEl.querySelectorAll('[data-face]').forEach((b) => { b.onclick = () => { faceSel = Number(b.dataset.face); renderInterfaces(); }; });
-  applyInsets();
 }
 addEventListener('resize', () => renderInterfaces());
+new ResizeObserver(() => { if (view === 'interfaces' && !sheetEl.hidden) { placeSheet(); applyInsets(); } })
+  .observe(document.querySelector('.top'));
 
 // ---------- animals: chibi Taiwanese wildlife living on the cubes (A)
 // Original characters built from simple shapes: toon shading, dark outlines, big shiny eyes and
@@ -5968,6 +5982,15 @@ const loadH2C = () => (h2cLoad ||= new Promise((res, rej) => {
   sc.onerror = () => { h2cLoad = null; rej(new Error('html2canvas did not load')); };
   document.head.append(sc);
 }));
+// In html2canvas's copy of the page: no page background (the 3D view goes under it), and the font at
+// its normal width (html2canvas can't draw the wide cut, and spaces the letters out instead).
+function h2cClone(doc) {
+  const st = doc.createElement('style');
+  st.textContent = 'html, body { background: transparent !important; } * { font-variation-settings: normal !important; }' +
+    // the hatched "voids connect" key: a tiled plain gradient, which it can draw, for the repeating one, which it can't
+    ' .key.open { background: linear-gradient(135deg, #b3261e 25%, #fff 25%, #fff 50%, #b3261e 50%, #b3261e 75%, #fff 75%) 0 0 / 6px 6px !important; }';
+  doc.head.append(st);
+}
 const shotSay = (text) => { statusNote = { until: Date.now() + 5000, text }; renderStatus(); };
 function shotCaption() {
   const s = timelineFocus();
@@ -5994,11 +6017,7 @@ function viewImage() {
       ignoreElements: (el) => el === gl || el.classList?.contains('menu') || el.id === 'exit-present' || el.tagName === 'DIALOG',
       // in its copy of the page: no page background (the 3D view is under it), and the font at its
       // normal width (html2canvas can't draw the wide cut, and spaces the letters out instead)
-      onclone: (doc) => {
-        const st = doc.createElement('style');
-        st.textContent = 'html, body { background: transparent !important; } * { font-variation-settings: normal !important; }';
-        doc.head.append(st);
-      },
+      onclone: h2cClone,
     }))
     .then((c) => g.drawImage(c, 0, 0, W, H))
     .catch(() => { shotNote = ' (without the interface: it could not be drawn)'; });
@@ -6042,6 +6061,70 @@ function copyView() {
 }
 document.getElementById('btn-copy-view').addEventListener('click', copyView);
 document.getElementById('btn-save-view').addEventListener('click', saveView);
+
+// ---------- the interfaces sheet's panels as images: Copy image (the face shown, so they can be
+// copied one by one) and Save all (every face, as PNGs in a .zip). Each is the face's panel as on
+// screen (heading, drawing, numbers), drawn on its own, with a line saying what and when.
+function publishedLine(slot) {
+  const b = slot.id && blocks[slot.id];
+  if (!b) return TITLE;
+  const when = new Date(b.publishedAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+  return `${TITLE} · ${slot.name}${b.versionCount > 1 ? `, version ${b.version + 1} of ${b.versionCount}` : ''}, published ${when}`;
+}
+async function facePanelImage(slot, c, d) {
+  const h2c = await loadH2C();
+  const panel = document.createElement('section');
+  panel.className = 'sheet';
+  // laid out like the sheet but whole (no scrolling), out of sight behind the 3D view
+  panel.style.cssText = 'position:fixed;left:0;top:0;right:auto;bottom:auto;z-index:-5;width:560px;height:auto;max-height:none;overflow:visible;';
+  const when = historyAt === null ? '' : ` at ${clock(historyAt)}`;
+  panel.innerHTML = `<header><h2>${esc(slot.name)} · interfaces${when}</h2></header>${faceDetailHtml(slot, c, d)}<p class="shot-foot">${esc(publishedLine(slot))}</p>`;
+  const copy = document.createElement('canvas');
+  copy.width = d.canvas.width; copy.height = d.canvas.height;
+  copy.getContext('2d').drawImage(d.canvas, 0, 0);
+  panel.querySelector('.drawing').prepend(copy);
+  document.body.append(panel);
+  try {
+    const out = await h2c(panel, { backgroundColor: '#ffffff', scale: 2, logging: false, onclone: h2cClone });
+    return await new Promise((res) => out.toBlob(res, 'image/png'));
+  } finally { panel.remove(); }
+}
+const faceFile = (slot, c, i) => `${safe(slot.name)}_${i + 1}_${faceTitle(c)}-face_${safe(ifaceNameOf(c.hid))}.png`;
+function copyFacePanel(slot, list, drawings, i) {
+  const png = facePanelImage(slot, list[i], drawings[i]);
+  const next = i + 1 < list.length ? ' Pick the next face and copy again.' : '';
+  const fallback = () => png.then((blob) => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = faceFile(slot, list[i], i); a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    shotSay(`The clipboard was out of reach, so face ${i + 1} of ${list.length} was saved as an image file instead.`);
+  }, () => shotSay('That panel could not be drawn as an image.'));
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') { fallback(); return; }
+  navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    .then(() => shotSay(`Face ${i + 1} of ${list.length} (${faceTitle(list[i])}) is on the clipboard.${next}`))
+    .catch(fallback);
+}
+async function saveFacePanels(slot, list, drawings, btn) {
+  btn.disabled = true;
+  const label = btn.textContent;
+  try {
+    const { zipSync } = await import('fflate');
+    const entries = {};
+    for (let i = 0; i < list.length; i++) {
+      btn.textContent = `Drawing ${i + 1} of ${list.length}…`;
+      const blob = await facePanelImage(slot, list[i], drawings[i]);
+      entries[faceFile(slot, list[i], i)] = [new Uint8Array(await blob.arrayBuffer()), { level: 0 }];   // PNGs are packed already
+    }
+    const name = `${safe(TITLE)}_${safe(slot.name)}_interfaces_${stamp(Date.now())}.zip`;
+    saveFile(zipSync(entries), name, 'application/zip');
+    shotSay(`The ${list.length} face panels were saved in ${name}.`);
+  } catch {
+    shotSay('The panels could not be drawn as images.');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = label;
+  }
+}
 
 const timer = new THREE.Clock();
 renderer.setAnimationLoop(() => {
