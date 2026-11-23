@@ -133,6 +133,7 @@
     background: none; padding: 6px 8px; text-align: left; white-space: nowrap; }
   .menu button::before { content: ''; width: 14px; flex: none; font-weight: 700; text-align: center; }
   .menu button[aria-pressed="true"]::before { content: '✓'; }
+  #btn-copy-view { border-top: 1px solid var(--rule) !important; border-radius: 0 0 4px 4px !important; margin-top: 3px; padding-top: 8px; }
   .menu kbd { order: 2; margin-left: auto; padding-left: 14px; font: inherit; font-size: 12px; color: var(--muted); }
   .keys .icon { width: 34px; height: 32px; padding: 0; display: grid; place-items: center; }
   .keys .icon svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
@@ -574,6 +575,21 @@
   <div class="keys">
     <span class="hint">Drag to orbit, scroll to zoom, click a cube for its details</span>
     <div class="kbar">
+      <div class="dd">
+        <button class="dd-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-views">Views <span aria-hidden="true">▾</span></button>
+        <div class="menu" id="menu-views" role="group" aria-label="Views" hidden>
+          <button data-view-named="persp" data-close aria-pressed="false" title="Back to the perspective overview">Perspective</button>
+          <button data-view-named="axon-sw" data-close aria-pressed="false" title="Axonometric (isometric), seen from the south-west">Axon from SW</button>
+          <button data-view-named="axon-se" data-close aria-pressed="false" title="Axonometric (isometric), seen from the south-east">Axon from SE</button>
+          <button data-view-named="axon-ne" data-close aria-pressed="false" title="Axonometric (isometric), seen from the north-east">Axon from NE</button>
+          <button data-view-named="axon-nw" data-close aria-pressed="false" title="Axonometric (isometric), seen from the north-west">Axon from NW</button>
+          <button data-view-named="elev-s" data-close aria-pressed="false" title="Elevation: the south side, straight on">South elevation</button>
+          <button data-view-named="elev-e" data-close aria-pressed="false" title="Elevation: the east side, straight on">East elevation</button>
+          <button data-view-named="elev-n" data-close aria-pressed="false" title="Elevation: the north side, straight on">North elevation</button>
+          <button data-view-named="elev-w" data-close aria-pressed="false" title="Elevation: the west side, straight on">West elevation</button>
+          <button id="btn-copy-view" data-close title="Copy the view as an image, to paste anywhere (K)"><kbd>K</kbd> Copy as image</button>
+        </div>
+      </div>
       <div class="dd">
         <button class="dd-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-display">Display <span aria-hidden="true">▾</span></button>
         <div class="menu" id="menu-display" role="group" aria-label="Display" hidden>
@@ -1432,7 +1448,8 @@ let barsSeen = null;   // height of the top and bottom bars at the last fit
 const DEFAULT_DIR = new THREE.Vector3(-0.62, -0.95, 0.85).normalize();
 const MATRIX_DIR = new THREE.Vector3(0, -0.5, 1).normalize();
 // Distance at which all 8 corners of `box` fit in the view (with room for the controls), looking along the current direction.
-function frame(box = currentBounds, dir = camGoal?.dir || camera.position.clone().sub(controls.target).normalize()) {
+// `fov`: the lens to end up with (the named views change it; otherwise the one in use, or on its way).
+function frame(box = currentBounds, dir = camGoal?.dir || camera.position.clone().sub(controls.target).normalize(), fov = camGoal?.fov ?? camera.fov) {
   const c = box.getCenter(new THREE.Vector3());
   const right = new THREE.Vector3().crossVectors(dir.clone().negate(), camera.up);
   if (right.lengthSq() < 1e-8) right.set(1, 0, 0);   // looking straight up or down
@@ -1442,7 +1459,7 @@ function frame(box = currentBounds, dir = camGoal?.dir || camera.position.clone(
   const inset = viewInsets();   // part of the screen taken by the interfaces panel and the bars
   const panel = inset.right || inset.bottom || inset.top;
   if (panel) margin = 0.92;
-  const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
+  const tan = Math.tan(THREE.MathUtils.degToRad(fov) / 2);
   let ty = tan * margin * (1 - (inset.bottom + inset.top) / innerHeight);
   const tx = tan * margin * camera.aspect * (1 - inset.right / innerWidth);
   const bars = barInsets();
@@ -1456,7 +1473,7 @@ function frame(box = currentBounds, dir = camGoal?.dir || camera.position.clone(
     const d = v.dot(dir);
     dist = Math.max(dist, d + Math.abs(v.dot(up)) / ty, d + Math.abs(v.dot(right)) / tx);
   }
-  camGoal = { target: c, dist: Math.max(dist, 0.1), dir: dir.clone() };
+  camGoal = { target: c, dist: Math.max(dist, 0.1), dir: dir.clone(), fov };
 }
 const STUDIO_DIR = new THREE.Vector3(-0.55, -0.75, 1.05).normalize();
 const lightDir = STUDIO_DIR.clone();
@@ -1781,6 +1798,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'escape') { if (menuOpen()) openMenu(null); else if (following) setFollowing(false); else if (presenting) setPresenting(false); else hideCard(); }
   else if (k === 'i') setFollowing(!following);
   else if (k === 'b') setCity(!cityOn);
+  else if (k === 'k') copyView();
   else if (k === 'h') setHistoryShown(!historyShown);
   else if (k === 'p') setPresenting(!presenting);
   else if (k === 'm') openManage();
@@ -1792,7 +1810,7 @@ addEventListener('keydown', (e) => {
   else if (k === 'u') poll(true);
 });
 // Steering by hand stops the camera glide and pauses the orbit for 20 s.
-controls.addEventListener('start', () => { camGoal = null; controls.autoRotate = false; clearTimeout(resumeTimer); });
+controls.addEventListener('start', () => { camGoal = null; controls.autoRotate = false; clearTimeout(resumeTimer); markNamedView(null); });
 controls.addEventListener('end', () => { resumeTimer = setTimeout(() => { controls.autoRotate = rotateWanted && view !== 'matrix'; }, 20000); });
 
 // ---------- timeline: every update as a dot in its group's row; click or drag to go back in time
@@ -5883,8 +5901,61 @@ function snapCamera() {
   if (!camGoal) return;
   controls.target.copy(camGoal.target);
   camera.position.copy(camGoal.target).addScaledVector(camGoal.dir, camGoal.dist);
+  camera.fov = camGoal.fov; camera.updateProjectionMatrix();
   camGoal = null;
 }
+// ---------- named views: the perspective overview, axonometrics from the four corners and elevations
+// of the four sides (following ?north=). The axons (isometric: 35.26° up) and the elevations are
+// parallel views, as near as makes no difference: a 2° lens from far off, so orbiting, zooming and
+// everything else keep working; Perspective (or the follow view) puts the normal lens back.
+const PERSP_FOV = camera.fov, PARALLEL_FOV = 2;
+const ISO = Math.atan(1 / Math.SQRT2);
+const side = (n, e) => NORTH_VEC.clone().multiplyScalar(n).addScaledVector(EAST_VEC, e).normalize();
+const raise = (v, el) => v.clone().multiplyScalar(Math.cos(el)).setZ(Math.sin(el));
+const NAMED_VIEWS = {
+  persp: () => [DEFAULT_DIR, PERSP_FOV],
+  'axon-sw': () => [raise(side(-1, -1), ISO), PARALLEL_FOV],
+  'axon-se': () => [raise(side(-1, 1), ISO), PARALLEL_FOV],
+  'axon-ne': () => [raise(side(1, 1), ISO), PARALLEL_FOV],
+  'axon-nw': () => [raise(side(1, -1), ISO), PARALLEL_FOV],
+  'elev-s': () => [side(-1, 0), PARALLEL_FOV],
+  'elev-e': () => [side(0, 1), PARALLEL_FOV],
+  'elev-n': () => [side(1, 0), PARALLEL_FOV],
+  'elev-w': () => [side(0, -1), PARALLEL_FOV],
+};
+const namedBtns = [...document.querySelectorAll('[data-view-named]')];
+function markNamedView(key) { for (const b of namedBtns) b.setAttribute('aria-pressed', b.dataset.viewNamed === key); }
+function setNamedView(key) {
+  if (following) setFollowing(false);
+  if (rotateWanted) setRotate(false);   // stay put in the view chosen
+  const [dir, fov] = NAMED_VIEWS[key]();
+  frame(currentBounds, dir, fov);
+  markNamedView(key);
+}
+for (const b of namedBtns) b.addEventListener('click', () => setNamedView(b.dataset.viewNamed));
+
+// Copy as image (K): the 3D view as it is now, as a PNG on the clipboard; where the browser won't
+// allow that (or the page is embedded without clipboard access), it is saved as a file instead.
+function copyView() {
+  renderer.render(scene, camera);   // draw it now, so the canvas holds this very frame
+  const png = new Promise((res) => renderer.domElement.toBlob(res, 'image/png'));
+  const say = (text) => { statusNote = { until: Date.now() + 5000, text }; renderStatus(); };
+  const save = async () => {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(await png);
+    a.download = `${safe(TITLE)}_view_${stamp(Date.now())}.png`;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+    say('The clipboard was out of reach, so the view was saved as an image file instead.');
+  };
+  if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') { save(); return; }
+  // the image as a promise: Safari wants the clipboard asked straight away, in the click
+  navigator.clipboard.write([new ClipboardItem({ 'image/png': png })])
+    .then(() => say('The view is on the clipboard, ready to paste.'))
+    .catch(save);
+}
+document.getElementById('btn-copy-view').addEventListener('click', copyView);
+
 const timer = new THREE.Clock();
 renderer.setAnimationLoop(() => {
   const dt = Math.min(timer.getDelta(), 0.1);
@@ -5917,13 +5988,19 @@ renderer.setAnimationLoop(() => {
   if (following) followCamera(dt);
   else if (camGoal) {
     const t = 1 - Math.exp(-dt * 4);
+    if (camera.fov !== camGoal.fov) {   // the lens eases too (evenly, in log terms: 28° to 2° and back)
+      camera.fov = Math.exp(THREE.MathUtils.lerp(Math.log(camera.fov), Math.log(camGoal.fov), t));
+      if (Math.abs(camera.fov - camGoal.fov) < 0.005) camera.fov = camGoal.fov;
+    }
+    // the distance that frames the model as the goal will, with the lens as it is now
+    const goalDist = camGoal.dist * Math.tan(THREE.MathUtils.degToRad(camGoal.fov) / 2) / Math.tan(THREE.MathUtils.degToRad(camera.fov) / 2);
     const offset = camera.position.clone().sub(controls.target);
-    const len = THREE.MathUtils.lerp(offset.length(), camGoal.dist, t);
+    const len = THREE.MathUtils.lerp(offset.length(), goalDist, t);
     const dir = offset.normalize().lerp(camGoal.dir, t).normalize();
     controls.target.lerp(camGoal.target, t);
     camera.position.copy(controls.target).addScaledVector(dir, len);
-    if (controls.target.distanceTo(camGoal.target) < camGoal.dist * 1e-3 && Math.abs(len - camGoal.dist) < camGoal.dist * 1e-3 &&
-        dir.angleTo(camGoal.dir) < 1e-3) camGoal = null;
+    if (controls.target.distanceTo(camGoal.target) < camGoal.dist * 1e-3 && Math.abs(len - goalDist) < goalDist * 1e-3 &&
+        dir.angleTo(camGoal.dir) < 1e-3 && camera.fov === camGoal.fov) camGoal = null;
   }
   if (!following) {
     const d = camera.position.distanceTo(controls.target);
