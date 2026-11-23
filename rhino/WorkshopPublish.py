@@ -36,6 +36,7 @@ Works in Rhino 7 and Rhino 8 (Windows and Mac). No plug-ins required.
 """
 import os
 import json
+import uuid
 import System
 import Rhino
 import Rhino.Geometry as rg
@@ -50,7 +51,8 @@ WORKSHOP_KEY = "blocks-2026"
 GROUPS = 8          # number of groups; keep it the same as ?groups= on the class screen
 SECTION = "WorkshopLive"
 STICKY_HANDLER = "workshoplive_publish_on_save"
-MAX_BYTES = 4 * 1024 * 1024
+MAX_BYTES = 25 * 1024 * 1024   # keep the same as MAX_BYTES in lib/manifest.js
+PART_BYTES = 4 * 1024 * 1024   # bigger cubes go up in parts of this size
 MAX_DEPTH = 8  # nested block definitions
 DOT_MARGIN_M = 0.03   # text dots this far outside the cube's bounding box still count as on it
 CUBE_LAYER = "Cube"
@@ -343,6 +345,28 @@ def http_send(method, url, data=None):
         return status, reader.ReadToEnd()
 
 
+def send_model(url, data, post, say=None):
+    """Send the .3dm bytes to url: in one request, or, when bigger than one request can carry
+    (Vercel takes 4.5 MB at most), in parts of PART_BYTES that the server joins up. Returns
+    (status, body) of the last request."""
+    total = data.Length
+    if total <= PART_BYTES:
+        return post(url, data)
+    upload = uuid.uuid4().hex
+    parts = (total + PART_BYTES - 1) // PART_BYTES
+    status, body = 0, ""
+    for i in range(parts):
+        n = min(PART_BYTES, total - i * PART_BYTES)
+        piece = System.Array.CreateInstance(System.Byte, n)
+        System.Array.Copy(data, i * PART_BYTES, piece, 0, n)
+        if say:
+            say("sending part %d of %d..." % (i + 1, parts))
+        status, body = post("%s&upload=%s&part=%d&parts=%d&size=%d" % (url, upload, i, parts, total), piece)
+        if status != 200:
+            break
+    return status, body
+
+
 def publish(doc, group, obj):
     """Publish one object as the group's cube. Returns (ok, message)."""
     if "your-project" in SERVER_URL.lower():
@@ -359,13 +383,14 @@ def publish(doc, group, obj):
                        "extrusion, SubD, mesh or block), not a curve, point or text.")
     size = os.path.getsize(path)
     if size > MAX_BYTES:
-        return False, ("Group %d's cube%s is %.1f MB; the limit is 4 MB. Simplify very smooth surfaces "
+        return False, ("Group %d's cube%s is %.1f MB; the limit is %d MB. Simplify very smooth surfaces "
                        "or fine detail and publish again." % (group, " with its negative space" if ghosts else "",
-                                                             size / 1048576.0))
+                                                             size / 1048576.0, MAX_BYTES // 1048576))
 
     data = System.IO.File.ReadAllBytes(path)
     url = "%s/api/publish?block=%d" % (SERVER_URL.rstrip("/"), group)
-    status, body = http_send("POST", url, data)
+    status, body = send_model(url, data, lambda u, d: http_send("POST", u, d),
+                              lambda text: Rhino.RhinoApp.WriteLine("Workshop Live: " + text))
     try:
         result = json.loads(body)
     except Exception:

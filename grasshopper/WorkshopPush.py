@@ -45,6 +45,7 @@ Works in Rhino 7 and Rhino 8 (Windows and Mac).
 """
 import os
 import json
+import uuid
 import time
 import System
 import Rhino
@@ -65,7 +66,8 @@ NEGATIVE_TAG = ("workshoplive", "negative")   # ... and is marked with this user
 DOT_INK = System.Drawing.Color.FromArgb(0x1e, 0x23, 0x2a)          # dark tags, like on the class screen
 NO_NAME = System.Drawing.Color.FromArgb(0xe0, 0x8a, 0x1c)          # a point that still needs a name
 GHOST_DOT = System.Drawing.Color.FromArgb(0xe4, 0xe7, 0xea)        # the names of negative space: pale
-MAX_BYTES = 4 * 1024 * 1024
+MAX_BYTES = 25 * 1024 * 1024   # keep the same as MAX_BYTES in lib/manifest.js
+PART_BYTES = 4 * 1024 * 1024   # bigger models go up in parts of this size
 AUTO_EVERY_S = 15     # auto: at most one publish per this many seconds
 
 
@@ -355,6 +357,28 @@ def http_post(url, data, key):
         return status, System.IO.StreamReader(ex.Response.GetResponseStream()).ReadToEnd()
 
 
+def send_model(url, data, post, say=None):
+    """Send the .3dm bytes to url: in one request, or, when bigger than one request can carry
+    (Vercel takes 4.5 MB at most), in parts of PART_BYTES that the server joins up. Returns
+    (status, body) of the last request."""
+    total = data.Length
+    if total <= PART_BYTES:
+        return post(url, data)
+    upload = uuid.uuid4().hex
+    parts = (total + PART_BYTES - 1) // PART_BYTES
+    status, body = 0, ""
+    for i in range(parts):
+        n = min(PART_BYTES, total - i * PART_BYTES)
+        piece = System.Array.CreateInstance(System.Byte, n)
+        System.Array.Copy(data, i * PART_BYTES, piece, 0, n)
+        if say:
+            say("sending part %d of %d..." % (i + 1, parts))
+        status, body = post("%s&upload=%s&part=%d&parts=%d&size=%d" % (url, upload, i, parts, total), piece)
+        if status != 200:
+            break
+    return status, body
+
+
 def publish(meshes, dots, ghosts, ghost_dots, group, colour, server, key):
     """Returns (ok, message)."""
     if "your-project" in server.lower():
@@ -362,8 +386,9 @@ def publish(meshes, dots, ghosts, ghost_dots, group, colour, server, key):
     path = write_3dm(meshes, dots, colour, group, ghosts, ghost_dots)
     size = os.path.getsize(path)
     if size > MAX_BYTES:
-        return False, "Group %d's geometry is %.1f MB; the limit is 4 MB. Simplify it and push again." % (group, size / 1048576.0)
-    status, body = http_post("%s/api/publish?block=%d" % (server.rstrip("/"), group), System.IO.File.ReadAllBytes(path), key)
+        return False, "Group %d's geometry is %.1f MB; the limit is %d MB. Simplify it and push again." % (group, size / 1048576.0, MAX_BYTES // 1048576)
+    status, body = send_model("%s/api/publish?block=%d" % (server.rstrip("/"), group), System.IO.File.ReadAllBytes(path),
+                              lambda u, d: http_post(u, d, key))
     try:
         result = json.loads(body)
     except Exception:
