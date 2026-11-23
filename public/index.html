@@ -585,7 +585,7 @@
           <button id="btn-rain" aria-pressed="false" title="Rain: where it falls, how it runs over the stone, where it drips and pools (D)"><kbd>D</kbd> Rain</button>
           <button id="btn-wind" aria-pressed="false" title="Wind: how the air flows round and through the cubes, from the NE by default (V)"><kbd>V</kbd> Wind</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
-          <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: butterflies, bees, dragonflies, birds, a heron, lizards, bats and a squirrel moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
+          <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: lizards, a night heron, white-eyes, butterflies, bats, a squirrel and carpenter bees moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
         </div>
       </div>
       <div class="dd">
@@ -3225,26 +3225,6 @@ function bee(a, { fur, abdomen, wing, bands = null, face = null }) {
   }
   return { head, wings };
 }
-function odonate(a, { thorax, abdomen, tip, eye, wing, slim = 1 }) {
-  blob(a, thorax, [0, 0.27, 0.12], [0.055 * slim, 0.09, 0.065 * slim]);
-  const tail = group(a, [0, 0.19, 0.12]);
-  blob(tail, abdomen, [0, -0.29, 0], [0.032 * slim, 0.3, 0.03 * slim]);
-  if (tip) blob(tail, tip, [0, -0.52, 0], [0.034 * slim, 0.07, 0.032 * slim], { outline: false });
-  for (let i = 1; i < 6; i++) blob(tail, '#1e232a', [0, -0.08 * i - 0.05, 0.002], [0.034 * slim, 0.006, 0.032 * slim], { outline: false });
-  const head = group(a, [0, 0.38, 0.13]);
-  for (const s of [-1, 1]) blob(head, eye, [s * 0.04 * slim, 0, 0.01], [0.05 * slim, 0.05, 0.05 * slim]);
-  blob(head, '', [0.02, 0.03, 0.05], [0.012, 0.01, 0.012], { outline: false, mat: flatMat('#ffffff') });
-  for (const y of [0.3, 0.25]) for (const s of [-1, 1]) blob(a, '#1e232a', [s * 0.05, y, 0.06], [0.008, 0.008, 0.06], { rot: [0, s * 0.5, 0], outline: false });
-  const wings = [];
-  for (const [y, k] of [[0.3, 1], [0.24, 1.15]]) for (const s of [-1, 1]) {
-    const w = group(a, [s * 0.03, y, 0.17]);
-    glass(w, wing, 0.4, [s * 0.25, 0, 0], [0.25, 0.042 * k, 0.004]);
-    blob(w, '', [s * 0.44, 0.012, 0.003], [0.02, 0.009, 0.004], { outline: false, mat: flatMat('#3a2a22') });
-    w.userData.side = s;
-    wings.push(w);
-  }
-  return { head, wings, tail };
-}
 // Small birds. `marks(head, a)` paints the species on.
 function bird(a, { back, belly, head: hc, wing, tail: tc, bill, legs: lc = '#5b5348', tailLen = 0.22, billLen = 0.07, billW = 0.035, marks }) {
   const legs = group(a, [0, 0.03, 0.17]);
@@ -3271,15 +3251,8 @@ function bird(a, { back, belly, head: hc, wing, tail: tc, bill, legs: lc = '#5b5
 }
 
 const WILD = {
-  birdwing: {
-    name: 'Golden birdwing 黃裳鳳蝶', says: ['…', '♪'], kind: 'butterfly', len: 0.16,
-    fly: { speed: 0.13, r: 0.045, acc: 0.25, cruise: 0.8, perch: 0.2, kinds: ['floor', 'wall'], rest: [3, 8], flap: 3.2, glide: true },
-    build: (a) => butterfly(a, { body: '#1c1c20', abdomen: '#e4b52a', fore: '#18181c', hind: '#f3c22b',
-      foreMarks: (w, s) => { for (const k of [0, 1, 2]) blob(w, '', [s * (0.12 + k * 0.07), 0.04 + k * 0.03, 0.009], [0.055, 0.008, 0.003], { outline: false, mat: flatMat('#6c6a66'), rot: [0, 0, s * 0.4] }); },
-      hindMarks: (w, s) => { for (const k of [0, 1, 2, 3]) blob(w, '', [s * (0.08 + k * 0.05), -0.18 + Math.abs(k - 1.5) * 0.02, 0.008], [0.02, 0.02, 0.003], { outline: false, mat: flatMat('#18181c') }); } }),
-  },
   bluebottle: {
-    name: 'Common bluebottle 青鳳蝶', says: ['…'], kind: 'butterfly', len: 0.09, count: 2,
+    name: 'Common bluebottle 青鳳蝶', says: ['…'], kind: 'butterfly', len: 0.09, count: 3,
     fly: { speed: 0.3, r: 0.03, acc: 0.6, cruise: 0.85, perch: 0.15, kinds: ['floor', 'wall'], rest: [2, 5], flap: 6 },
     build: (a) => butterfly(a, { body: '#22252a', abdomen: '#d9dad2', fore: '#232528', hind: '#232528',
       foreMarks: (w, s) => blob(w, '', [s * 0.12, 0.02, 0.009], [0.11, 0.035, 0.003], { outline: false, mat: flatMat('#62d0c2'), rot: [0, 0, s * 0.15] }),
@@ -3290,85 +3263,49 @@ const WILD = {
     fly: { speed: 0.32, r: 0.022, acc: 1.0, cruise: 0.2, hover: [0.6, 2.2], perch: 0.3, kinds: ['wall', 'floor'], rest: [2, 6] },
     build: (a) => bee(a, { fur: '#1d1c22', abdomen: '#22212a', wing: '#4a3a75' }),
   },
-  leafcutter: {
-    name: 'Leafcutter bee 切葉蜂', says: ['bzz'], kind: 'bee', len: 0.03, count: 3,
-    fly: { speed: 0.26, r: 0.018, acc: 0.9, cruise: 0.2, hover: [0.4, 1.6], perch: 0.45, kinds: ['wall'], rest: [2, 7], leaf: true },
-    build: (a) => {
-      const p = bee(a, { fur: '#4b4640', abdomen: '#2d2b29', bands: '#e9e4d6', wing: '#c9d4dc', face: '#d9cfb8' });
-      p.leaf = group(a, [0, 0.05, 0.12]);
-      blob(p.leaf, '#5ea83c', [0, 0, 0], [0.22, 0.3, 0.07], { rot: [0.2, 0, 0.3] });
-      return p;
-    },
-  },
-  dragonfly: {
-    name: 'Dragonfly 蜻蜓', says: ['…'], kind: 'odonate', len: 0.08, count: 2,
-    fly: { speed: 0.55, r: 0.03, acc: 1.6, cruise: 0.3, hover: [0.5, 1.8], perch: 0.35, kinds: ['floor', 'wall'], rest: [3, 9], flat: true },
-    build: (a) => odonate(a, { thorax: '#c8392d', abdomen: '#d93a2c', eye: '#9b2a22', wing: '#eef4f6' }),
-  },
-  damselfly: {
-    name: 'Damselfly 豆娘', says: ['…'], kind: 'odonate', len: 0.06, count: 2,
-    fly: { speed: 0.16, r: 0.025, acc: 0.5, cruise: 0.6, hover: [0.4, 1.2], perch: 0.45, kinds: ['floor', 'wall'], rest: [3, 9] },
-    build: (a) => odonate(a, { thorax: '#2aa79c', abdomen: '#25403f', tip: '#3bb6e6', eye: '#2c8a7e', wing: '#f2f6f6', slim: 0.7 }),
-  },
-  bulbul: {
-    name: 'Light-vented bulbul 白頭翁', says: ['chi-chi-wu!', '♪', 'chirp'], kind: 'bird', len: 0.19, count: 2,
-    fly: { speed: 0.5, r: 0.05, acc: 1.2, cruise: 0.3, perch: 0.75, kinds: ['floor'], rest: [3, 9], flap: 13, bound: true },
-    build: (a) => bird(a, { back: '#7d8c60', belly: '#e6e5d9', head: '#202024', wing: '#8fa458', tail: '#7a875c', bill: '#2a2a2c',
-      marks: (h) => { blob(h, '#f6f5ef', [0, -0.05, 0.06], [0.085, 0.075, 0.06], { outline: false }); blob(h, '#f6f5ef', [0, -0.03, -0.02], [0.125, 0.04, 0.035], { outline: false }); eyes(h, 0.08, 0.025, 0.07, 0.02); } }),
-  },
   whiteeye: {
     name: 'Japanese white-eye 綠繡眼', says: ['tsee', 'tsee-tsee', '♪'], kind: 'bird', len: 0.11, count: 3, flock: true,
     fly: { speed: 0.45, r: 0.035, acc: 1.3, cruise: 0.45, perch: 0.65, kinds: ['floor'], rest: [2, 6], flap: 16, bound: true },
     build: (a) => bird(a, { back: '#9cbc38', belly: '#ecebe0', head: '#a6c43c', wing: '#86a832', tail: '#86a832', bill: '#3a3a3a', billLen: 0.06, billW: 0.025,
       marks: (h, b) => { blob(b, '#f1d83a', [0, 0.16, 0.36], [0.1, 0.07, 0.08], { outline: false }); eyes(h, 0.075, 0.025, 0.07, 0.022, '#ffffff'); } }),
   },
-  barbet: {
-    name: 'Taiwan barbet 五色鳥', says: ['ko-ko-ko', 'kok…', '♪'], kind: 'bird', len: 0.2,
-    fly: { speed: 0.4, r: 0.055, acc: 1.0, cruise: 0.2, perch: 0.8, kinds: ['floor'], rest: [5, 12], flap: 11 },
-    build: (a) => bird(a, { back: '#3c9a3e', belly: '#78c24e', head: '#f2cf2a', wing: '#348a36', tail: '#3c9a3e', bill: '#d8cfb2', billLen: 0.08, billW: 0.05,
-      marks: (h) => {
-        blob(h, '#2b6fd6', [0, -0.02, 0.07], [0.115, 0.1, 0.06], { outline: false });
-        blob(h, '#e03a2e', [0, 0.1, 0.06], [0.04, 0.02, 0.025], { outline: false });
-        blob(h, '#e03a2e', [0, 0.06, -0.09], [0.05, 0.04, 0.03], { outline: false });
-        for (const s of [-1, 1]) blob(h, '#1c1c1f', [s * 0.085, 0.04, 0.03], [0.03, 0.06, 0.018], { outline: false, rot: [0, 0, s * 0.3] });
-        eyes(h, 0.08, 0.03, 0.075, 0.022);
-      } }),
-  },
-  monarch: {
-    name: 'Black-naped monarch 黑枕藍鶲', says: ['chee-chee', '♪'], kind: 'bird', len: 0.16,
-    fly: { speed: 0.5, r: 0.045, acc: 1.3, cruise: 0.35, perch: 0.7, kinds: ['floor'], rest: [3, 8], flap: 14 },
-    build: (a) => bird(a, { back: '#3a78d8', belly: '#dde3ec', head: '#3f86ea', wing: '#4b6ea8', tail: '#3a6cc0', bill: '#2d3a55', tailLen: 0.32,
-      marks: (h) => { blob(h, '#16181c', [0, -0.08, 0.07], [0.05, 0.04, 0.04], { outline: false }); blob(h, '#16181c', [0, 0.07, -0.085], [0.07, 0.015, 0.015], { outline: false }); eyes(h, 0.08, 0.025, 0.07, 0.02); } }),
-  },
   heron: {
-    name: 'Pacific reef heron 岩鷺', says: ['kraak', '…'], kind: 'heron', len: 0.48,
-    walk: { speed: 0.07, acc: 0.2, h: 0.03, minNz: 0.85, head: 0.45, rest: [4, 12], range: [0.1, 0.4], roam: 0.35 },
-    fly: { speed: 0.5, r: 0.16, acc: 0.6, cruise: 0, perch: 1, kinds: ['floor'], rest: [5, 12], flap: 3.5, chance: 0.3, outside: 1 },
+    // stocky, short-necked, chestnut red with a black cap; walks the lawns slowly and freezes, neck out
+    name: 'Malayan night heron 黑冠麻鷺', says: ['oo…', '…', 'kwok'], kind: 'heron', len: 0.47,
+    walk: { speed: 0.05, acc: 0.15, h: 0.03, minNz: 0.85, head: 0.32, rest: [6, 16], range: [0.08, 0.3], roam: 0.35 },
+    fly: { speed: 0.45, r: 0.15, acc: 0.6, cruise: 0, perch: 1, kinds: ['floor'], rest: [6, 14], flap: 3.8, chance: 0.2, outside: 1 },
     build: (a) => {
-      const slate = '#4c5763', leg = '#b8b061';
+      const rufous = '#a4532e', back = '#7a4f34', dark = '#1f1d1c', buff = '#dcc7a2', leg = '#7d8a55';
       const legs = [];
       for (const s of [-1, 1]) {
-        const l = group(a, [s * 0.035, 0, 0.42]);
-        blob(l, leg, [0, 0, -0.21], [0.012, 0.012, 0.21], { outline: false });
-        blob(l, leg, [0, 0.03, -0.415], [0.02, 0.06, 0.008], { outline: false });
+        const l = group(a, [s * 0.04, 0.01, 0.27]);
+        blob(l, leg, [0, 0, -0.135], [0.015, 0.015, 0.135], { outline: false });
+        blob(l, leg, [0, 0.035, -0.267], [0.022, 0.065, 0.009], { outline: false });
         legs.push(l);
       }
-      blob(a, slate, [0, -0.03, 0.5], [0.1, 0.2, 0.1], { rot: [0.35, 0, 0] });
-      const tail = group(a, [0, -0.2, 0.44]);
-      blob(tail, slate, [0, -0.04, 0], [0.05, 0.07, 0.02], { rot: [0.4, 0, 0] });
-      const neck = group(a, [0, 0.12, 0.56]);
-      blob(neck, slate, [0, 0.02, 0.06], [0.04, 0.04, 0.09], { rot: [0.4, 0, 0] });
-      blob(neck, slate, [0, 0.03, 0.17], [0.035, 0.035, 0.07], { rot: [-0.3, 0, 0] });
-      blob(neck, '#e9e4d2', [0, 0.06, 0.12], [0.012, 0.012, 0.06], { outline: false });
-      const head = group(neck, [0, 0.03, 0.26]);
-      blob(head, slate, [0, 0, 0], [0.045, 0.06, 0.045]);
-      blob(head, '#c4b45a', [0, 0.12, -0.01], [0.014, 0.08, 0.012], { geo: CONE });
-      eyes(head, 0.035, 0.015, 0.033, 0.009, '#e8d94a');
+      blob(a, back, [0, -0.02, 0.37], [0.12, 0.21, 0.11], { rot: [0.15, 0, 0] });
+      blob(a, buff, [0, 0.05, 0.32], [0.09, 0.14, 0.075], { rot: [0.15, 0, 0], outline: false });
+      for (const y of [0.1, 0.04, -0.02]) blob(a, '#6b4a32', [0, y, 0.255], [0.012, 0.035, 0.006], { outline: false });   // streaked belly
+      const tail = group(a, [0, -0.21, 0.36]);
+      blob(tail, dark, [0, -0.04, 0], [0.055, 0.06, 0.02], { rot: [0.3, 0, 0] });
+      const neck = group(a, [0, 0.12, 0.42]);
+      blob(neck, rufous, [0, 0.02, 0.05], [0.06, 0.055, 0.075], { rot: [0.25, 0, 0] });
+      blob(neck, buff, [0, 0.065, 0.03], [0.018, 0.015, 0.06], { outline: false });
+      blob(neck, dark, [0, 0.075, 0.03], [0.005, 0.01, 0.055], { outline: false });
+      const head = group(neck, [0, 0.05, 0.13]);
+      blob(head, rufous, [0, 0, 0], [0.05, 0.065, 0.05]);
+      blob(head, dark, [0, -0.008, 0.028], [0.049, 0.058, 0.026], { outline: false });   // black cap
+      blob(head, dark, [0, -0.065, 0.025], [0.018, 0.045, 0.016], { rot: [-0.5, 0, 0], outline: false });   // crest
+      blob(head, dark, [0, 0.1, -0.01], [0.02, 0.06, 0.017], { geo: CONE });   // short, thick bill
+      for (const s of [-1, 1]) blob(head, '#8fb2c8', [s * 0.03, 0.045, 0.002], [0.012, 0.02, 0.01], { outline: false });   // blue lores
+      eyes(head, 0.025, 0.012, 0.037, 0.01, '#e8d94a');
       const wings = [];
       for (const s of [-1, 1]) {
-        const w = group(a, [s * 0.08, 0.04, 0.55]);
-        blob(w, slate, [s * 0.22, -0.03, 0], [0.23, 0.09, 0.016]);
-        blob(w, '#3b4550', [s * 0.48, -0.06, 0], [0.12, 0.07, 0.014], { rot: [0, 0, -s * 0.3] });
+        const w = group(a, [s * 0.09, 0.03, 0.42]);
+        blob(w, back, [s * 0.2, -0.03, 0], [0.21, 0.09, 0.016]);
+        for (const k of [0, 1, 2]) blob(w, '', [s * (0.1 + k * 0.08), -0.02, 0.012], [0.03, 0.06, 0.004], { outline: false, mat: flatMat('#5c3b27') });
+        blob(w, dark, [s * 0.44, -0.06, 0], [0.12, 0.075, 0.014], { rot: [0, 0, -s * 0.3] });
+        blob(w, '', [s * 0.52, -0.1, 0.006], [0.03, 0.02, 0.004], { outline: false, mat: flatMat('#f1ede4') });   // white tips
         wings.push(w);
       }
       return { head, neck, wings, tail, legs };
@@ -3998,7 +3935,6 @@ class Wild {
     this.path = { ...o, curve, L: curve.getLength() * a.s, s: 0, startUp: this.up.clone() };
     this.mode = 'move';
     this.stuck = 0;
-    this.leaf = !!(this.spec.fly?.leaf && o.end === 'perch' && o.n && Math.abs(o.n.z) < 0.5);
   }
   arrive() {
     const p = this.path, a = this.anchorAct();
@@ -4143,9 +4079,7 @@ class Wild {
     if (kind === 'butterfly') {
       if (flying || this.mode === 'hover' || this.mode === 'wait' && !perched) {
         this.flap += dt * f.flap * Math.PI * 2;
-        const glide = f.glide && Math.sin(t * 0.5 + this.phase) > 0.55;
-        const want = glide ? 0.15 : 0.3 + 0.95 * Math.sin(this.flap);
-        this.lift = glide ? ease(this.lift, want, 6) : want;
+        this.lift = 0.3 + 0.95 * Math.sin(this.flap);
         this.body.position.z = 0.06 * Math.sin(this.flap - 1);
       } else {
         const bask = Math.sin(t * 0.4 + this.phase) > 0.3;
@@ -4158,14 +4092,6 @@ class Wild {
       this.fold = ease(this.fold, air ? 0 : 0.95, 10);
       wing(air ? 0.35 + 0.55 * Math.sin(t * 90 + this.phase) : 0.06, this.fold);
       this.body.position.z = air ? 0.05 * Math.sin(t * 9 + this.phase) : 0;
-      if (P.leaf) P.leaf.visible = !!this.leaf && (air || this.mode === 'perch' && this.timer > 1.5);
-    } else if (kind === 'odonate') {
-      const air = flying || this.mode === 'hover' || (this.mode === 'wait' && !perched);
-      if (air) P.wings.forEach((w, i) => w.rotation.set(0, -w.userData.side * 0.4 * Math.sin(t * 70 + (i > 1 ? 1.4 : 0)), 0, 'ZYX'));
-      else if (f.flat) P.wings.forEach((w) => w.rotation.set(0, -w.userData.side * 0.08, -w.userData.side * 0.12, 'ZYX'));
-      else P.wings.forEach((w) => w.rotation.set(0, -w.userData.side * 1.35, -w.userData.side * 1.3, 'ZYX'));
-      this.body.position.z = air ? 0.03 * Math.sin(t * 4 + this.phase) : 0;
-      if (P.tail) P.tail.rotation.x = air ? 0.08 * Math.sin(t * 3) : 0;
     } else if (kind === 'bird' || kind === 'heron') {
       if (flying) {
         this.flap += dt * f.flap * Math.PI * 2;
