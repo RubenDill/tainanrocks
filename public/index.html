@@ -595,7 +595,7 @@
           <button id="btn-rain" aria-pressed="false" title="Rain: where it falls, how it runs over the stone, where it drips and pools (D)"><kbd>D</kbd> Rain</button>
           <button id="btn-wind" aria-pressed="false" title="Wind: how the air flows round and through the cubes, from the NE by default (V)"><kbd>V</kbd> Wind</button>
           <button id="btn-animals" aria-pressed="false" title="Taiwanese animals living on the cubes (A)"><kbd>A</kbd> Animals</button>
-          <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: lizards, a night heron, white-eyes, butterflies, bats, a squirrel and carpenter bees moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
+          <button id="btn-wildlife" aria-pressed="false" title="Tainan's wildlife: lizards, a night heron, white-eyes, butterflies, bats, a squirrel, carpenter bees and earthworms moving through the voids (W)"><kbd>W</kbd> Wildlife</button>
           <button id="btn-follow" aria-pressed="false" title="See through an animal's eyes: click one to pick it, or start with the first in view (I)"><kbd>I</kbd> Follow an animal</button>
         </div>
       </div>
@@ -3357,6 +3357,26 @@ const WILD = {
       return { head, legs, tail, body };
     },
   },
+  worm: {
+    // no group of its own: in every view it crawls wherever the stone (and the ground) takes it
+    name: 'Earthworm 蚯蚓', says: ['…'], group: null, kind: 'worm', len: 0.12, count: 4,
+    walk: { speed: 0.012, acc: 0.03, h: 0.01, minNz: -1.2, head: 0.012, rest: [2, 8], range: [0.06, 0.3], roam: 0.05 },
+    build: (a) => {
+      const skin = '#c47a70', dark = '#a65d55', band = '#d99a8c';
+      const segs = [], rings = [];   // the chain (each piece hangs from the one in front) and the ring on each
+      let parent = group(a, [0, 0.45, 0.032]);
+      for (let i = 0; i < 14; i++) {
+        const taper = i < 2 ? 0.75 + i * 0.12 : 1 - Math.max(0, i - 8) * 0.09;
+        const r = 0.032 * taper;
+        const ring = blob(parent, i === 4 || i === 5 ? band : i % 2 ? dark : skin, [0, -0.033, 0], [r, 0.042, r * 0.9]);
+        ring.userData.base = ring.scale.clone();
+        segs.push(parent); rings.push(ring);
+        parent = group(parent, [0, -0.066, 0]);
+      }
+      blob(segs[0], '', [0, 0.008, 0.012], [0.006, 0.006, 0.006], { outline: false, mat: flatMat('#5a3330') });   // the mouth end
+      return { head: segs[0], segs, rings };
+    },
+  },
   bat: {
     name: 'Insectivorous bat 食蟲蝙蝠', says: ['((·))', '…', 'zzz'], group: 5, kind: 'bat', len: 0.18, count: 3,
     fly: { speed: 0.55, r: 0.04, acc: 1.4, cruise: 0.85, perch: 0.35, kinds: ['ceil'], rest: [6, 16], flap: 11, jitter: true },
@@ -3793,8 +3813,9 @@ class Wild {
   setAnchor(a) { this.anchor = a ? { raw: a.raw, h: a.h } : null; }
   // Outside Combined each kind lives in its group's cube: plans are made with the world narrowed to it.
   homeAct() { return act.find((a) => groupNumber(a.id) === this.spec.group) || null; }
+  homed() { return view !== 'combined' && this.spec.group != null; }   // worms (no group) go anywhere
   atHome() {
-    if (view === 'combined') return true;
+    if (!this.homed()) return true;
     const h = this.homeAct();
     return !!h && !!this.anchor && this.anchor.raw === h.raw;
   }
@@ -3809,7 +3830,7 @@ class Wild {
   // ---- choosing where to go next, and asking for a plan
   spawn() {
     if (!act.length) return false;
-    if (view !== 'combined' && !homeScope) return this.scoped(() => this.spawn());
+    if (this.homed() && !homeScope) return this.scoped(() => this.spawn());
     for (let tries = 0; tries < 30; tries++) {
       const a = pickOf(places());
       const fly = this.spec.fly;
@@ -3858,7 +3879,7 @@ class Wild {
   plan() {
     if (this.mode !== 'wait') return;
     if (!act.length) { this.mode = 'gone'; return; }
-    if (view !== 'combined' && !homeScope) {
+    if (this.homed() && !homeScope) {
       if (!this.homeAct()) { this.mode = 'gone'; return; }
       this.scoped(() => this.plan());
       return;
@@ -4160,6 +4181,17 @@ class Wild {
       if (air) { this.flap += dt * f.flap * Math.PI * 2; wing(0.1 + 1.0 * Math.sin(this.flap), 0); }
       else wing(0.5 * this.hang, 1.3 * this.hang);
       P.wings.forEach((w) => w.scale.setScalar(1 - 0.55 * this.hang));
+    } else if (kind === 'worm') {
+      // a slow crawl: a bulge runs down the body (the rings swell and shorten in turn) while it
+      // sways a little side to side; resting, it lifts its front end and feels about
+      const crawling = this.mode === 'move';
+      this.stride = (this.stride || 0) + (crawling ? this.speed * dt / (this.spec.len * wildScale) * 40 : dt * 0.6);
+      P.segs.forEach((g, i) => {
+        g.rotation.z = ease(g.rotation.z, (crawling ? 0.1 : 0.05) * Math.sin(this.stride * 0.5 - i * 0.6 + this.phase), 6);
+        const k = Math.sin(this.stride - i * 0.8), b = P.rings[i].userData.base;
+        P.rings[i].scale.set(b.x * (1 + 0.14 * k), b.y * (1 - 0.18 * k), b.z * (1 + 0.14 * k));
+      });
+      P.segs[0].rotation.x = ease(P.segs[0].rotation.x, crawling ? 0 : 0.35 * Math.max(0, Math.sin(t * 0.6 + this.phase)), 3);
     } else if (kind === 'lizard' || kind === 'squirrel') {
       const walking = this.mode === 'move';
       this.stride = (this.stride || 0) + (walking ? this.speed * dt / (this.spec.len * wildScale) * (kind === 'lizard' ? 22 : 12) : 0);
@@ -4259,7 +4291,7 @@ function renderFollow() {
   if (ctxFollow.hidden) return;
   document.getElementById('follow-name').textContent = picked.spec.name;
   const same = wild.filter((w) => w.kind === picked.kind);
-  document.getElementById('follow-note').textContent = `group ${picked.spec.group}${same.length > 1 ? ` · ${same.indexOf(picked) + 1} of ${same.length}` : ''}`;
+  document.getElementById('follow-note').textContent = `${picked.spec.group == null ? 'all over the cubes' : `group ${picked.spec.group}`}${same.length > 1 ? ` · ${same.indexOf(picked) + 1} of ${same.length}` : ''}`;
   const go = document.getElementById('follow-go');
   go.textContent = following ? 'Back to the overview' : 'See through its eyes';
   go.setAttribute('aria-pressed', following);
@@ -4288,7 +4320,7 @@ function setFollowing(on) {
       camGoal = null;
       followBack.fov = camera.fov;
       followBack.dir.copy(camera.position).sub(controls.target).normalize();
-      camera.fov = 95;   // a wide eye
+      camera.fov = 115;   // a very wide eye
       followPos.copy(camera.position); followQuat.copy(camera.quaternion);   // ease in from where the camera is
       look.yaw = look.pitch = 0;
       picked.body.visible = false;   // not its own head and wings in the way
