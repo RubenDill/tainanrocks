@@ -460,7 +460,7 @@
     </div>
     <div class="context" id="ctx-single" hidden>
       <button class="step" id="prev" aria-label="Previous group" title="Previous group (←)">‹</button>
-      <div class="who" aria-live="polite"><b id="single-name">Group 1</b><small id="single-time"></small></div>
+      <div class="who" aria-live="polite"><b id="single-name">Group 1 (Lizard)</b><small id="single-time"></small></div>
       <button class="step" id="next" aria-label="Next group" title="Next group (→)">›</button>
     </div>
     <section class="context card" id="card" hidden aria-live="polite"></section>
@@ -663,6 +663,9 @@ const GROUP_COLORS = ['#e05a3a', '#f2b134', '#7fb04b', '#2a9d8f', '#3a78c2', '#6
 const EXTRA_COLORS = ['#ff48b0', '#0078bf', '#ff6c2f', '#765ba7', '#00838a', '#ffb511', '#62a8e5', '#bb8b41'];
 const WHITE = '#f6f7f5';
 
+// Each group's animal, shown after its number: "Group 2 (Heron)".
+const GROUP_ANIMALS = { 1: 'Lizard', 2: 'Heron', 3: 'Wide Eyes Bird', 4: 'Butterfly', 5: 'Bat', 6: 'Squirrel', 7: 'Carpenter Bees', 8: 'Human' };
+const groupName = (n) => (GROUP_ANIMALS[n] ? `Group ${n} (${GROUP_ANIMALS[n]})` : `Group ${n}`);
 // Published IDs "3", "G3", "GROUP3", "Group-3" all mean group 3.
 function groupNumber(id) {
   const m = /^(?:GROUP|GRP|G)?[-_]?(\d{1,3})$/.exec(id);
@@ -1270,11 +1273,11 @@ function computeSlots() {
     if (n && n >= 1 && n <= GROUPS && (!byNumber[n] || new Date(b.publishedAt) > new Date(blocks[byNumber[n]].publishedAt))) byNumber[n] = id;
   }
   const list = [];
-  for (let n = 1; n <= GROUPS; n++) list.push({ key: String(n), id: byNumber[n] || null, short: String(n), name: `Group ${n}` });
+  for (let n = 1; n <= GROUPS; n++) list.push({ key: String(n), id: byNumber[n] || null, short: String(n), name: groupName(n) });
   for (const id of Object.keys(blocks).sort()) {
     const n = groupNumber(id);
     if (n && n >= 1 && n <= GROUPS) continue;
-    list.push({ key: id, id, short: n ? String(n) : id, name: n ? `Group ${n}` : id });
+    list.push({ key: id, id, short: n ? String(n) : id, name: n ? groupName(n) : id });
   }
   return list;
 }
@@ -1577,7 +1580,7 @@ function renderGroups() {
 let firstLoad = true;
 let lastEvent = null;
 const statusEl = document.getElementById('status');
-const slotName = (id) => (groupNumber(id) ? `Group ${groupNumber(id)}` : id);
+const slotName = (id) => (groupNumber(id) ? groupName(groupNumber(id)) : id);
 let statusNote = null;  // { text, until }: a short message after pressing Update
 function renderStatus() {
   if (statusEl.classList.contains('error')) return;
@@ -1820,7 +1823,7 @@ function historyIndex(updates) {
 // One row per group: the numbered groups in order, then any other names.
 function timelineRows(updates) {
   const rows = [], index = {};
-  for (let n = 1; n <= GROUPS; n++) { index[n] = rows.length; rows.push({ name: `Group ${n}`, short: String(n), color: groupColor(String(n)) }); }
+  for (let n = 1; n <= GROUPS; n++) { index[n] = rows.length; rows.push({ name: groupName(n), short: String(n), color: groupColor(String(n)) }); }
   for (const id of [...new Set(updates.map((u) => u.id))].sort()) {
     const n = groupNumber(id);
     if (n && n >= 1 && n <= GROUPS) continue;
@@ -4513,7 +4516,7 @@ function renderFollow() {
   if (ctxFollow.hidden) return;
   document.getElementById('follow-name').textContent = picked.spec.name;
   const same = wild.filter((w) => w.kind === picked.kind);
-  document.getElementById('follow-note').textContent = `${picked.spec.group == null ? 'all over the cubes' : `group ${picked.spec.group}`}${same.length > 1 ? ` · ${same.indexOf(picked) + 1} of ${same.length}` : ''}`;
+  document.getElementById('follow-note').textContent = `${picked.spec.group == null ? 'all over the cubes' : groupName(picked.spec.group)}${same.length > 1 ? ` · ${same.indexOf(picked) + 1} of ${same.length}` : ''}`;
   const go = document.getElementById('follow-go');
   go.textContent = following ? 'Back to the overview' : 'See through its eyes';
   go.setAttribute('aria-pressed', following);
