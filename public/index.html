@@ -6901,6 +6901,9 @@ async function facePanelImage(slot, c, d, { compact = false } = {}) {
   const copy = document.createElement('canvas');
   copy.width = d.canvas.width; copy.height = d.canvas.height;
   copy.getContext('2d').drawImage(d.canvas, 0, 0);
+  // its own shape, whatever the window's height: on screen the drawing is capped at 36vh and fitted
+  // (object-fit), which html2canvas ignores, stretching it to the capped box instead
+  copy.style.cssText = 'display:block;width:100%;height:auto;max-height:none;';
   panel.querySelector('.drawing').prepend(copy);
   document.body.append(panel);
   try {
