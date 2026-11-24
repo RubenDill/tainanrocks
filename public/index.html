@@ -5837,7 +5837,7 @@ async function buildReport(slot) {
   wait.innerHTML = `<div role="status"><b>Report on ${esc(slot.name)}</b><p>Getting ready…</p><i></i></div>`;
   document.body.append(wait);
   let stepsDone = 0;
-  const STEPS = 12;
+  const STEPS = 17;
   const step = async (text) => {
     wait.querySelector('p').textContent = text;
     wait.querySelector('i').style.setProperty('--done', `${Math.round(100 * stepsDone++ / STEPS)}%`);
@@ -5846,6 +5846,7 @@ async function buildReport(slot) {
   const saved = {
     view, selected, historyAt, explode, sectionOn, cuts: cuts.map((c) => ({ ...c })), sunOn,
     expo: { on: expoOn, period: expoPeriod, measure: expoMeasure }, rain: rainOnU.value, wind: windUniforms.windOn.value,
+    sunDay, rainWind, windFrom,
     bg: scene.background, paving: paving.visible, wild: wildLayer.visible, critters: critterLayer.visible, sunPath: sunGroup.visible,
   };
   const greyed = [];   // [material, its colour] of the other cubes while they're greyed out
@@ -5898,16 +5899,89 @@ async function buildReport(slot) {
     expoOn = true; expoPeriod = 'year'; expoMeasure = 'hours';
     expoUniforms.expoOn.value = 1; expoSamples = makeSamples(); applyExposureWeights();
     const expoShot = (dir, fov = 2) => { expoKey = ''; expoAt = 0; updateExposure(); return shoot(currentBounds.clone(), dir, { fov }); };
+    const ticksNow = () => [...document.querySelectorAll('#expo-ticks span')].map((e) => e.textContent);
     shots.sun = [
       { label: 'On its own, from the south-west', img: expoShot(raise(side(-1, -1), ISO)) },
       { label: 'On its own, from the north-east', img: expoShot(raise(side(1, 1), ISO)) },
     ];
+    shots.sunTicks = ticksNow();
+    shots.sunTitle = 'Hours of direct sun a day, averaged over the year (clear sky)';
+    // the longest and the shortest day
+    await step('Sun on the longest and shortest days…');
+    expoPeriod = 'day';
+    shots.solstices = [[172, '21 June, the longest day'], [355, '21 December, the shortest day']].map(([d, label]) => {
+      sunDay = d; expoSamples = makeSamples(); applyExposureWeights();
+      const img = expoShot(raise(side(-1, -1), ISO));
+      return { label, img, ticks: ticksNow() };
+    });
+    expoPeriod = 'year'; sunDay = saved.sunDay; expoSamples = makeSamples(); applyExposureWeights();
     explode = 0; toView('combined');
     shots.sun.push({ label: 'In place, shaded by the other cubes', img: expoShot(DEFAULT_DIR, 28) });
-    shots.sunTicks = [...document.querySelectorAll('#expo-ticks span')].map((e) => e.textContent);
-    shots.sunTitle = 'Hours of direct sun a day, averaged over the year (clear sky)';
     expoOn = saved.expo.on; expoPeriod = saved.expo.period; expoMeasure = saved.expo.measure;
     expoUniforms.expoOn.value = 0; expoKey = '';
+
+    // ---- rain: straight down, on the cube alone and in place (the simulation, run to the end here)
+    const runRain = async (label) => {
+      rainWind = 'none';
+      rainSim = null;
+      const t0 = performance.now();
+      while (performance.now() - t0 < 120000) {
+        updateRain(0);   // builds the fields it needs, then a few milliseconds of drops a call
+        const sim = rainSim;
+        if (sim && sim.i >= sim.order.length) break;
+        wait.querySelector('p').textContent = `${label} ${sim ? Math.round(100 * sim.i / sim.order.length) : 0}%`;
+        await new Promise((r) => setTimeout(r, 0));
+      }
+      const sim = rainSim;
+      if (!sim) return null;
+      uploadRain(sim);
+      return { drops: sim.i, of: sim.order.length, pools: sim.pools };
+    };
+    await step('Rain on the cube alone…');
+    toView('single');
+    const rainAlone = await runRain('Rain on the cube alone:');
+    rainOnU.value = 1;
+    shots.rain = [
+      { label: 'On its own, from the south-west', img: shoot(currentBounds.clone(), raise(side(-1, -1), ISO)) },
+      { label: 'On its own, from the north-east', img: shoot(currentBounds.clone(), raise(side(1, 1), ISO)) },
+    ];
+    rainOnU.value = 0;
+    await step('Rain in place…');
+    toView('combined');
+    const rainPlaced = await runRain('Rain in place, among the other cubes:');
+    rainOnU.value = 1;
+    shots.rain.push({ label: 'In place, sheltered by (and draining from) the other cubes', img: shoot(currentBounds.clone(), DEFAULT_DIR, { fov: 28 }) });
+    rainOnU.value = 0;
+    shots.rainStats = { alone: rainAlone, placed: rainPlaced };
+    rainSim = null; rainUniforms.rainTex.value = RAIN_EMPTY; rainPointsReset();
+    rainWind = saved.rainWind;
+
+    // ---- wind: the two monsoons, NE (winter) and SW (summer), round the whole structure
+    const runWind = async (from, label) => {
+      windFrom = from;
+      windSim?.worker.terminate(); windSim = null;
+      const t0 = performance.now();
+      let done = false;
+      while (performance.now() - t0 < 150000) {
+        updateWind(0);   // starts the simulation (in a worker) once the fields are ready
+        const ws = windSim;
+        if (ws && ws.ux && ws.step >= ws.steps) { done = true; break; }
+        wait.querySelector('p').textContent = `${label} ${ws ? Math.round(100 * ws.step / ws.steps) : 0}%`;
+        await new Promise((r) => setTimeout(r, 120));
+      }
+      const ws = windSim;
+      return ws && ws.ux ? { done, pct: Math.round(100 * ws.step / ws.steps), cm: ws.f.c * 100 } : null;
+    };
+    shots.wind = [];
+    for (const [from, name2, dirW, season] of [['NE', 'north-east', raise(side(1, 1), 0.55), 'the winter monsoon'], ['SW', 'south-west', raise(side(-1, -1), 0.55), 'the summer monsoon']]) {
+      await step(`Wind from the ${name2}…`);
+      const run = await runWind(from, `Wind from the ${name2} (${season}):`);
+      windUniforms.windOn.value = run ? 1 : 0;
+      shots.wind.push({ label: `From the ${name2}, ${season}, seen from upwind${run && !run.done ? ` (stopped at ${run.pct}%)` : ''}`, img: shoot(currentBounds.clone(), dirW, { fov: 28, w: 1400, h: 1000 }), run });
+      windUniforms.windOn.value = 0;
+    }
+    windSim?.worker.terminate(); windSim = null; windUniforms.windTex.value = RAIN_EMPTY; windTrailsReset();
+    windFrom = saved.windFrom;
 
     // ---- in place among the others (greyed)
     await step('In the structure…');
@@ -6128,23 +6202,58 @@ async function buildReport(slot) {
         doc.addImage(f.img, 'PNG', M + j * (w + 8), M + 22, h * props.width / props.height, h, undefined, 'FAST');
       });
     }
-    // sun
-    newPage('Sun over a year');
-    shots.sun.forEach((s2, k) => {
-      const w = (PW - 2 * M - 10) / 3, h = w * 3 / 4, x = M + k * (w + 5);
-      image(s2.img, x, M + 24, w, h); caption(s2.label, x, M + 24 + h + 4, w);
-    });
-    {
-      const ramp = ['#fbf0e8', '#f6c7a6', '#ee9561', '#d65f2a', '#8e3412'], lx = M, ly = M + 128, lw = 120;
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...ink); doc.text(shots.sunTitle, lx, ly - 3);
+    // the environment: sun, rain, wind
+    // a colour ramp with its ticks; `ticks`: [label, where along it (0..1)]
+    const legend = (lx, ly, lw, heading, ramp, ticks) => {
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...ink); doc.text(pdfText(heading), lx, ly - 3);
+      const last = ramp.length - 1;
       for (let i = 0; i < 60; i++) {
-        const t = i / 59 * 4, k2 = Math.min(3, Math.floor(t)), f = t - k2;
+        const t = i / 59 * last, k2 = Math.min(last - 1, Math.floor(t)), f = t - k2;
         const a = [1, 3, 5].map((j) => parseInt(ramp[k2].slice(j, j + 2), 16)), b2 = [1, 3, 5].map((j) => parseInt(ramp[k2 + 1].slice(j, j + 2), 16));
         doc.setFillColor(...a.map((v, j) => Math.round(v + (b2[j] - v) * f))); doc.rect(lx + i * lw / 60, ly, lw / 60 + 0.05, 4, 'F');
       }
-      doc.setDrawColor(...rule); doc.rect(lx, ly, lw, 4);
-      shots.sunTicks.forEach((t, i) => { caption(t, lx + i * lw / (shots.sunTicks.length - 1), ly + 8.5, 30); });
-      caption('Darkest: sun all day. Direct sun only, clear sky, the shadows of every cube in view; the day is averaged over the whole year, in Tainan.', lx, ly + 16, PW - 2 * M);
+      doc.setDrawColor(...rule); doc.setLineWidth(0.15); doc.rect(lx, ly, lw, 4);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...muted);
+      ticks.forEach(([label, f]) => doc.text(pdfText(label), lx + f * lw, ly + 8.5, { align: f < 0.02 ? 'left' : f > 0.98 ? 'right' : 'center' }));
+    };
+    const SUN_RAMP = ['#fbf0e8', '#f6c7a6', '#ee9561', '#d65f2a', '#8e3412'];
+    const even = (labels) => labels.map((l, i) => [l, i / Math.max(1, labels.length - 1)]);
+    const row3 = (items, top) => items.forEach((s2, k) => {
+      const w = (PW - 2 * M - 10) / 3, h = w * 3 / 4, x = M + k * (w + 5);
+      image(s2.img, x, top, w, h); caption(s2.label, x, top + h + 4, w);
+    });
+    newPage('Sun over a year');
+    row3(shots.sun, M + 24);
+    legend(M, M + 128, 120, shots.sunTitle, SUN_RAMP, even(shots.sunTicks));
+    caption('Darkest: sun all day. Direct sun only, clear sky, the shadows of every cube in view; the day is averaged over the whole year, in Tainan.', M, M + 144, PW - 2 * M);
+
+    newPage('Sun on the longest and shortest days');
+    shots.solstices.forEach((s2, k) => {
+      const w = (PW - 2 * M - 12) / 2, ih = 98, iw = ih * 4 / 3, x = M + k * (w + 12) + (w - iw) / 2;
+      image(s2.img, x, M + 24, iw, ih); caption(`On its own, from the south-west: ${s2.label}`, x, M + 24 + ih + 4, iw);
+      legend(x, M + 140, iw, 'Hours of direct sun that day', SUN_RAMP, even(s2.ticks));
+    });
+    caption('Each scale runs from no sun to the most any surface could get that day, so the two days are not on one scale. Clear sky, in Tainan.', M, PH - M, PW - 2 * M);
+
+    newPage('Rain');
+    row3(shots.rain, M + 24);
+    legend(M, M + 128, 120, 'Water received, compared with open flat ground (log scale)', RAIN_RAMP,
+      [[0, 'dry'], [1, '1x'], [3, '3x'], [10, '10x'], [RAIN_VMAX, `${RAIN_VMAX}x`]].map(([v, l]) => [l, rainLevel(v)]));
+    {
+      const r1 = shots.rainStats.alone, r2 = shots.rainStats.placed;
+      const part = (r, where) => (!r ? '' : `${where}: ${r.drops.toLocaleString()}${r.drops < r.of ? ` of ${r.of.toLocaleString()}` : ''} drops, ${r.pools.toLocaleString()} of them ending in pools.`);
+      caption(`Rain falling straight down, followed over the stone: it runs downhill, spreads off flats over edges and into holes, drips off overhangs and pools in hollows. Pale is sheltered and dry; dark blue is a channel or a pool that collects the water of a larger area. ${part(r1, 'On its own')} ${part(r2, 'In place')}`, M, M + 144, PW - 2 * M);
+    }
+
+    newPage('Wind');
+    shots.wind.forEach((s2, k) => {
+      const w = (PW - 2 * M - 10) / 2, ih = 98, iw = ih * 1.4, x = M + k * (w + 10) + (w - iw) / 2;
+      image(s2.img, x, M + 24, iw, ih); caption(s2.label, x, M + 24 + ih + 4, iw);
+    });
+    legend(M, M + 140, 120, 'Wind near the surfaces, against the open wind', WIND_RAMP, even(['still', '0.5x', '1x open wind', '1.5x', '2x']));
+    {
+      const cm = shots.wind.find((w2) => w2.run)?.run.cm;
+      caption(`The air flowing round and through the whole structure, simulated (lattice Boltzmann${cm ? `, ${cm.toFixed(1)} cm cells` : ''}) and averaged over the last part of the run. Blue is sheltered, red is where the air speeds up. Tainan's winter monsoon blows from the north-east, the summer one from the south-west.`, M, M + 156, PW - 2 * M);
     }
     // voids, if it published its negative space
     if (latest.voids?.length) {
@@ -6183,7 +6292,9 @@ async function buildReport(slot) {
     expoOn = saved.expo.on; expoPeriod = saved.expo.period; expoMeasure = saved.expo.measure;
     expoUniforms.expoOn.value = expoOn ? 1 : 0; expoKey = ''; expoSamples = makeSamples(); applyExposureWeights();
     renderExposurePanel();
+    sunDay = saved.sunDay; rainWind = saved.rainWind; windFrom = saved.windFrom;
     if (saved.sunOn) { sunOn = true; applyLight(); }
+    renderRainPanel(); renderWindPanel(); renderSunPanel();
     sunGroup.visible = saved.sunPath;
     explode = saved.explode;
     if (historyAt !== saved.historyAt) { historyAt = saved.historyAt; await sync(); }
