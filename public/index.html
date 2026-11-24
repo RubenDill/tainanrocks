@@ -5907,6 +5907,7 @@ function shoot(box, dir, { fov = 2, w = 1200, h = 900, up = new THREE.Vector3(0,
   turnGroundCompass(cam);
   sizeDots(cam, h);
   if (sectionUniform.value) placeCaps();
+  if (gridOn) setGridRef(groundRef, gridRefBlock());
   renderer.render(scene, cam);
   return renderer.domElement.toDataURL('image/jpeg', 0.9);
 }
@@ -5931,7 +5932,7 @@ async function buildReport(slot) {
   wait.innerHTML = `<div role="status"><b>Report on ${esc(slot.name)}</b><p>Getting ready…</p><i></i></div>`;
   document.body.append(wait);
   let stepsDone = 0;
-  const STEPS = 17;
+  const STEPS = 18;
   const step = async (text) => {
     wait.querySelector('p').textContent = text;
     wait.querySelector('i').style.setProperty('--done', `${Math.round(100 * stepsDone++ / STEPS)}%`);
@@ -5940,10 +5941,9 @@ async function buildReport(slot) {
   const saved = {
     view, selected, historyAt, explode, sectionOn, cuts: cuts.map((c) => ({ ...c })), sunOn,
     expo: { on: expoOn, period: expoPeriod, measure: expoMeasure }, rain: rainOnU.value, wind: windUniforms.windOn.value,
-    sunDay, rainWind, windFrom,
+    sunDay, rainWind, windFrom, mode, grid: gridOn, city: cityOn, wildOn,
     bg: scene.background, paving: paving.visible, wild: wildLayer.visible, critters: critterLayer.visible, sunPath: sunGroup.visible,
   };
-  const greyed = [];   // [material, its colour] of the other cubes while they're greyed out
   const jsPDFReady = loadJsPDF();
   renderer.setAnimationLoop(null);
   try {
@@ -5954,6 +5954,11 @@ async function buildReport(slot) {
     sunGroup.visible = false;
     rainOnU.value = 0; windUniforms.windOn.value = 0; expoUniforms.expoOn.value = 0;
     highlight(null);
+    // white display mode and the 5 cm grid on every picture (the city renders turn the grid off)
+    const repaint = () => { for (const [bid, b] of Object.entries(blocks)) if (b.raw) paint(bid, b.raw, b.ghost); };
+    const markGroup = () => blocks[id]?.raw?.traverse((o) => { if (o.isMesh) o.material.color.set(groupColor(id)); });   // the group in its colour, the rest white
+    mode = 'white'; repaint();
+    setGrid(true);
     const toView = (v) => { view = v; selected = slot.key; layout(); snapHolders(); decor.visible = false; };
 
     // ---- the latest version, from every side
@@ -5971,22 +5976,28 @@ async function buildReport(slot) {
     const sides = { South: [-1, 0], East: [0, 1], North: [1, 0], West: [0, -1] };
     shots.elevations = Object.entries(sides).map(([k, [n, e]]) => ({ label: `${k} elevation`, img: shoot(box, side(n, e)) }));
 
-    // ---- plan and sections through the middle
-    await step('Plan and sections…');
-    const plan = shoot(box, new THREE.Vector3(0, 0, 1), { up: NORTH_VEC });
+    // ---- sections every 5 cm along each axis (one axis to a page), each cut seen straight on
+    await step('Sections every 5 cm…');
     sectionOn = true;
-    const cutAt = (a) => { cuts.forEach((c, k) => { c.on = k === a; c.at = 0.5; c.flip = false; }); updateCuts(); };
-    cutAt(2); const secZ = shoot(box, new THREE.Vector3(0, 0, 1), { up: NORTH_VEC });
-    cutAt(0); const secX = shoot(box, new THREE.Vector3(1, 0, 0));
-    cutAt(1); const secY = shoot(box, new THREE.Vector3(0, 1, 0));
+    const SECTION_STEP = 0.05;
+    const cutBox = currentBounds.clone().expandByScalar(nominal * 0.03);   // the box updateCuts measures along
+    shots.sectionSets = [
+      { a: 0, name: 'X', from: 'its -X face', look: 'each seen from the +X side', dir: new THREE.Vector3(1, 0, 0), up: new THREE.Vector3(0, 0, 1) },
+      { a: 1, name: 'Y', from: 'its -Y face', look: 'each seen from the +Y side', dir: new THREE.Vector3(0, 1, 0), up: new THREE.Vector3(0, 0, 1) },
+      { a: 2, name: 'Z', from: 'its bottom', look: 'each seen from above, north up', dir: new THREE.Vector3(0, 0, 1), up: NORTH_VEC },
+    ].map(({ a, name, from, look, dir, up }) => {
+      const lo = box.min.getComponent(a), len = box.max.getComponent(a) - lo;
+      const c0 = cutBox.min.getComponent(a), cl = cutBox.max.getComponent(a) - c0;
+      const items = [];
+      for (let d = SECTION_STEP; d < len - 0.005; d += SECTION_STEP) {
+        cuts.forEach((c, k) => { c.on = k === a; c.flip = false; c.at = (lo + d - c0) / cl; });
+        updateCuts();
+        items.push({ label: `${name} = ${Math.round(d * 100)} cm`, img: shoot(box, dir, { up, w: 900, h: 760 }) });
+      }
+      return { name, from, look, items };
+    });
     saved.cuts.forEach((c, k) => Object.assign(cuts[k], c));
     sectionOn = saved.sectionOn; updateCuts();
-    shots.sections = [
-      { label: 'Plan, from above (north up)', img: plan },
-      { label: 'Horizontal section at mid-height, from above', img: secZ },
-      { label: 'Section across X at the middle, looking towards -X', img: secX },
-      { label: 'Section across Y at the middle, looking towards -Y', img: secY },
-    ];
 
     // ---- the sun over a year: on the cube alone, and in place among the others
     await step('Sun over a year…');
@@ -6077,27 +6088,33 @@ async function buildReport(slot) {
     windSim?.worker.terminate(); windSim = null; windUniforms.windTex.value = RAIN_EMPTY; windTrailsReset();
     windFrom = saved.windFrom;
 
-    // ---- in place among the others (greyed)
+    // ---- in place among the others: the group in its colour, the rest white
     await step('In the structure…');
-    for (const [bid, b] of Object.entries(blocks)) {
-      if (bid === id || !b.raw) continue;
-      b.raw.traverse((o) => { if (o.isMesh && o.material?.color) { greyed.push([o.material, o.material.color.clone()]); o.material.color.set('#e1e4e7'); } });
-    }
+    markGroup();
     shots.context = shoot(currentBounds.clone(), DEFAULT_DIR, { fov: 28, w: 1500, h: 1000 });
     shots.contextPlan = shoot(currentBounds.clone(), new THREE.Vector3(0, 0, 1), { up: NORTH_VEC, w: 1000, h: 1000 });
-    for (const [m, c] of greyed) m.color.copy(c);
-    greyed.length = 0;
+    repaint();
     const near = contacts(id);
     const nameOf = slotName;   // by group number: the slots change while the versions are drawn
 
     // ---- interfaces: each shared face's panel
     await step(`Interfaces (${near.length} ${near.length === 1 ? 'face' : 'faces'})…`);
-    toView('single');
     shots.faces = [];
-    for (const c of near) {
-      const d = interfaceDrawing(id, c);
-      try { shots.faces.push({ c, img: await blobToDataURL(await facePanelImage(slot, c, d)) }); } catch { /* skipped if it can't be drawn */ }
+    if (near.length) {
+      // the cube and the cubes it touches, pulled apart, with the shared faces drawn in the gaps; in the
+      // groups' colours, which the panels' keys refer to
+      mode = 'groups'; repaint();
+      view = 'interfaces'; selected = slot.key; faceSel = 0;
+      layout(); snapHolders(); renderInterfaces();
+      shots.ifaceView = shoot(currentBounds.clone(), raise(side(-1, -1), 0.6), { fov: 28, w: 1300, h: 1300, margin: 0.9 });
+      mode = 'white'; repaint();
+      for (const c of near) {
+        const d = interfaceDrawing(id, c);
+        try { shots.faces.push({ c, img: await blobToDataURL(await facePanelImage(slot, c, d, { compact: true })) }); } catch { /* skipped if it can't be drawn */ }
+      }
     }
+    toView('single');
+    renderInterfaces();   // out of the interfaces view: its sheets go
 
     // ---- how it developed: up to eight versions, evenly spread, at one scale
     const n = versions.length, m = Math.min(8, n);
@@ -6123,8 +6140,41 @@ async function buildReport(slot) {
       toView('single');
       e.img = shoot(common, raise(side(-1, -1), ISO), { w: 900, h: 800 });
     }
-    historyAt = saved.historyAt;
+    historyAt = null;
     await sync();
+
+    // ---- in the city, with the wildlife: a few perspectives, no grid, the group in its colour
+    await step('In the city, with the wildlife…');
+    setGrid(false);
+    if (!cityOn) setCity(true);   // paints the panorama the first time
+    scene.background = cityTex; paving.visible = true;
+    explode = 0; toView('combined');
+    markGroup();
+    if (!wildOn) setWild(true);
+    wildLayer.visible = true;
+    for (let k = 0; k < 900; k++) {   // half a minute of their life, so they're out and about
+      updateWild(1 / 30);
+      if (k % 90 === 89) { wait.querySelector('p').textContent = `In the city, with the wildlife: letting the animals settle… ${Math.round(100 * k / 900)}%`; await new Promise((r) => setTimeout(r, 0)); }
+    }
+    // seen from the side the group's cube is on, so it's in front: within 30° of square on to it (further
+    // round, the cubes next to it in the row hide it)
+    const cityBox = currentBounds.clone();
+    // the side it's on: the one it's nearest, against how wide and deep the structure is (a cube in the
+    // front row, off to one end, still faces the front)
+    const off = blocks[id] ? blocks[id].holder.position.clone().sub(cityBox.getCenter(new THREE.Vector3())) : new THREE.Vector3();
+    const half = cityBox.getSize(new THREE.Vector3()).multiplyScalar(0.5);
+    const fx = off.x / Math.max(half.x, 1e-6), fy = off.y / Math.max(half.y, 1e-6);
+    const out = Math.max(Math.abs(fx), Math.abs(fy)) < 0.15 ? DEFAULT_DIR.clone().setZ(0)   // in the middle: the usual corner
+      : Math.abs(fx) >= Math.abs(fy) ? new THREE.Vector3(Math.sign(fx), 0, 0) : new THREE.Vector3(0, Math.sign(fy), 0);
+    out.normalize();
+    const turned = (deg) => out.clone().applyAxisAngle(new THREE.Vector3(0, 0, 1), THREE.MathUtils.degToRad(deg));
+    const compassOf = (v) => COMPASS_8[Math.round(((Math.atan2(v.dot(EAST_VEC), v.dot(NORTH_VEC)) * 180 / Math.PI + 360) % 360) / 45) % 8];
+    shots.city = [
+      { label: `From the ${compassOf(turned(-20))}`, img: shoot(cityBox, raise(turned(-20), 0.3), { fov: 40, w: 1800, h: 1200, margin: 0.62 }) },
+      { label: `From the ${compassOf(turned(30))}, lower down`, img: shoot(cityBox, raise(turned(30), 0.12), { fov: 50, w: 1400, h: 1000, margin: 0.55 }) },
+      { label: `From the ${compassOf(out)}, close to the ground`, img: shoot(cityBox, raise(out, 0.05), { fov: 60, w: 1400, h: 1000, margin: 0.6 }) },
+    ];
+    repaint();
 
     // ---- the pages
     await step('Putting the pages together…');
@@ -6160,141 +6210,143 @@ async function buildReport(slot) {
       if (note) caption(note, M, PH - M, PW - 2 * M);
     };
 
-    // cover
+    // cover: the view large and in the middle, a few figures in a row, one sentence
     newPage();
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(22); doc.setTextColor(...ink);
-    const nameLines = doc.splitTextToSize(name, 108);
-    doc.text(nameLines, M, M + 22);
-    const below = M + 22 + (nameLines.length - 1) * 9;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(12); doc.setTextColor(...muted);
-    doc.text(`Design report · ${title}`, M, below + 9);
-    doc.setFillColor(...rgb); doc.rect(M, below + 13, 40, 2.2, 'F');
     const first = versionTime(versions[0]), last = versionTime(versions[n - 1]);
-    const rows = [
-      ['Latest version', `${n > 1 ? `version ${n} of ${n}, ` : ''}published ${fmtWhenLong(last)}`],
+    doc.setFont('helvetica', 'bold'); doc.setFontSize(22); doc.setTextColor(...ink);
+    doc.text(name, PW / 2, M + 18, { align: 'center' });
+    doc.setFont('helvetica', 'normal'); doc.setFontSize(11); doc.setTextColor(...muted);
+    doc.text(`Design report · ${title}`, PW / 2, M + 24.5, { align: 'center' });
+    doc.setFillColor(...rgb); doc.rect(PW / 2 - 20, M + 27, 40, 1.6, 'F');
+    const hh = 118, hw = hh * 1.25;
+    image(shots.hero, (PW - hw) / 2, M + 31, hw, hh);
+    const figs = [
       ['Size', `${fmtNum(fig.size.x)} × ${fmtNum(fig.size.y)} × ${fmtNum(fig.size.z)} m`],
-      ['Volume', fig.volume === null ? "can't tell (not one closed solid)" : `${fmtNum(fig.volume, 3)} m³ (${fmtNum(fig.volume * 1000, 0)} L)`],
-      ['Void', fig.voidShare === null ? '–' : `${fmtNum(fig.voidShare * 100, 0)}% of its bounding box`],
-      ['In concrete', fig.volume === null ? '–' : `about ${fmtNum(fig.volume * CONCRETE_DENSITY, 0)} kg (2.4 t/m³)`],
-      ['Surface', `${fmtNum(fig.area)} m²`],
-      ['Touching', near.length ? near.map((c) => nameOf(c.hid)).join(', ') : 'no other cube'],
-      ['Model', `${fmtNum(fig.tris, 0)} triangles${versions[n - 1].size ? `, ${fmtBytes(versions[n - 1].size)} file` : ''}`],
-      ['Versions', n === 1 ? `1, published ${fmtWhenLong(first)}` : `${n}, from ${fmtWhenLong(first)} to ${fmtWhenLong(last)} (${fmtSpan(last - first)})`],
+      ['Volume', fig.volume === null ? '–' : `${fmtNum(fig.volume * 1000, 0)} L`],
+      ['Void', fig.voidShare === null ? '–' : `${fmtNum(fig.voidShare * 100, 0)}% of its box`],
+      ['Versions', n === 1 ? '1' : `${n} over ${fmtSpan(last - first)}`],
+      ['Touching', near.length ? `group${near.length > 1 ? 's' : ''} ${near.map((c) => groupNumber(c.hid) ?? c.hid).join(', ')}` : 'no other cube'],
     ];
-    let y = below + 26;
-    doc.setFontSize(10);
-    for (const [k, v] of rows) {
-      doc.setTextColor(...muted); doc.text(k, M, y);
-      doc.setTextColor(...ink); const lines = doc.splitTextToSize(pdfText(v), 82); doc.text(lines, M + 28, y);
-      y += 5.6 * lines.length + 0.6;
-    }
-    // a few sentences on how it developed
-    const story = [];
-    if (n === 1) story.push(`${slot.name} published once, on ${fmtWhenLong(first)}.`);
-    else {
-      story.push(`${slot.name} published ${n} versions over ${fmtSpan(last - first)}.`);
+    const tw = (PW - 2 * M - 4 * 4) / 5, ty0 = M + 31 + hh + 5;
+    figs.forEach(([k, v], i) => {
+      const x = M + i * (tw + 4);
+      doc.setDrawColor(...rule); doc.setLineWidth(0.15); doc.line(x, ty0, x + tw, ty0);
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(8.5); doc.setTextColor(...muted); doc.text(k, x, ty0 + 4.5);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...ink); doc.text(pdfText(v), x, ty0 + 10, { maxWidth: tw });
+    });
+    {
       const a = evo[0]?.fig, z = evo[evo.length - 1]?.fig;
-      if (a && z && a.volume !== null && z.volume !== null) {
-        const dv = (z.volume - a.volume) / a.volume;
-        story.push(`From the first to the latest version the volume went from ${fmtNum(a.volume * 1000, 0)} L to ${fmtNum(z.volume * 1000, 0)} L (${dv >= 0 ? '+' : ''}${fmtNum(dv * 100, 0)}%), and the void share from ${fmtNum(a.voidShare * 100, 0)}% to ${fmtNum(z.voidShare * 100, 0)}%.`);
-      }
-      const gaps = versions.slice(1).map((v, k) => versionTime(v) - versionTime(versions[k]));
-      const longest = Math.max(...gaps), at = gaps.indexOf(longest);
-      if (n > 2) story.push(`The longest pause, ${fmtSpan(longest)}, came before version ${at + 2}.`);
+      const line = n === 1 ? `Published once, on ${fmtWhenLong(first)}.`
+        : a && z && a.voidShare !== null && z.voidShare !== null
+          ? `From the first to the latest version the void share went from ${fmtNum(a.voidShare * 100, 0)}% to ${fmtNum(z.voidShare * 100, 0)}%; the latest was published ${fmtWhenLong(last)}.`
+          : `The latest version was published ${fmtWhenLong(last)}.`;
+      caption(line, M, ty0 + 17, PW - 2 * M);
     }
-    if (near.length) story.push(`It touches ${near.length} other ${near.length === 1 ? 'cube' : 'cubes'}; the interfaces pages show where their voids meet.`);
-    y += 4;
-    doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...ink); doc.text('In short', M, y); y += 5.5;
-    doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
-    const storyLines = doc.splitTextToSize(pdfText(story.join(' ')), 110);
-    doc.text(storyLines, M, y);
-    image(shots.hero, 130, M + 12, 155, 124);
-    caption('Perspective of the latest version', 130, M + 141, 155);
-    caption(`Made ${fmtWhenLong(Date.now())}. Pictures are of the latest version unless they say otherwise; the parallel views are drawn without perspective.`, M, PH - M, PW - 2 * M);
+    grid4('Axonometric views', shots.axons, 'Isometric (35.3° up), without perspective, with the 5 cm grid. The letters on the ground mark north, east, south and west.');
+    grid4('Elevations', shots.elevations, 'Each side straight on, without perspective, with the 5 cm grid.');
+    // sections: one axis to a page, the cuts in a grid
+    for (const set of shots.sectionSets) {
+      if (!set.items.length) continue;
+      newPage(`Sections across ${set.name}`);
+      const cols = 4, top = M + 22, rowsN = Math.ceil(set.items.length / cols);
+      const gw = (PW - 2 * M - (cols - 1) * 5) / cols, gh = (PH - top - M - 10) / rowsN;
+      const ih = Math.min(gh - 7, gw * 760 / 900), iw = ih * 900 / 760;
+      set.items.forEach((it, k) => {
+        const x = M + (k % cols) * (gw + 5) + (gw - iw) / 2, y = top + Math.floor(k / cols) * gh;
+        image(it.img, x, y, iw, ih); caption(it.label, x, y + ih + 4, iw);
+      });
+      caption(`Cut every 5 cm across ${set.name}, measured from ${set.from}, ${set.look}. The cut faces are drawn solid, so the voids read as gaps; the grid is 5 cm.`, M, PH - M, PW - 2 * M);
+    }
 
-    grid4('Axonometric views', shots.axons, 'Isometric (35.3° up), without perspective. The letters on the ground mark north, east, south and west.');
-    grid4('Elevations', shots.elevations, 'Each side straight on, without perspective.');
-    grid4('Plan and sections', shots.sections, 'The sections cut through the middle of the cube; the cut faces are drawn solid, so the voids read as gaps.');
-
-    // how it developed
+    // how it developed: the void share over the versions, each version's axon above its point
     if (evo.length > 1) {
       newPage('How it developed');
-      caption(`${evo.length === n ? `All ${n} versions` : `${evo.length} of the ${n} versions, spread evenly from the first to the latest`}, from the south-west at one scale.`, M, M + 21, PW - 2 * M);
-      const cols = 4, top = M + 26, gw = (PW - 2 * M - 3 * 5) / cols, rowsN = Math.ceil(evo.length / cols), gh = Math.min(70, (PH - top - M - 22) / rowsN), ih = gh - 9, iw = Math.min(gw, ih * 9 / 8);
+      caption(`${evo.length === n ? `All ${n} versions` : `${evo.length} of the ${n} versions, spread evenly from the first to the latest`}, from the south-west at one scale, above the share of their bounding box left void.`, M, M + 21, PW - 2 * M);
+      const cols = evo.length, gap = 3, colW = (PW - 2 * M - 12 - gap * (cols - 1)) / cols;
+      const cx = (k) => M + 12 + k * (colW + gap) + colW / 2;
+      const tw2 = Math.min(colW, 44), th2 = tw2 * 8 / 9, top = M + 26;
+      evo.forEach((e, k) => image(e.img, cx(k) - tw2 / 2, top, tw2, th2));
+      const c0 = top + th2 + 8, ch = Math.max(40, PH - M - 26 - c0), c1 = c0 + ch;
+      const vals = evo.map((e) => (e.fig.voidShare === null ? null : e.fig.voidShare * 100));
+      const known = vals.filter((v) => v !== null);
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...ink); doc.text('Void share of the bounding box (%)', M, c0 - 2.5);
+      doc.setDrawColor(...rule); doc.setLineWidth(0.2); doc.rect(M, c0, PW - 2 * M, ch);
+      if (known.length) {
+        const lo = Math.max(0, Math.floor((Math.min(...known) - 5) / 10) * 10), hi = Math.min(100, Math.ceil((Math.max(...known) + 5) / 10) * 10);
+        const Y = (v) => c1 - 4 - (v - lo) / Math.max(1, hi - lo) * (ch - 10);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5);
+        for (let v = lo; v <= hi; v += 10) {   // light lines every 10%
+          doc.setDrawColor(230, 233, 236); doc.setLineWidth(0.15); doc.line(M + 10, Y(v), PW - M, Y(v));
+          doc.setTextColor(...muted); doc.text(`${v}%`, M + 2, Y(v) + 1);
+        }
+        doc.setDrawColor(...rgb); doc.setLineWidth(0.7);
+        let prev = null;
+        vals.forEach((v, k) => {
+          if (v === null) { prev = null; return; }
+          if (prev) doc.line(prev[0], prev[1], cx(k), Y(v));
+          prev = [cx(k), Y(v)];
+        });
+        vals.forEach((v, k) => {
+          doc.setDrawColor(200, 205, 210); doc.setLineWidth(0.15); doc.setLineDashPattern([0.6, 0.8], 0);
+          doc.line(cx(k), top + th2 + 1, cx(k), v === null ? c1 : Y(v) - 1.5);   // from the axon down to its point
+          doc.setLineDashPattern([], 0);
+          if (v === null) return;
+          doc.setFillColor(...rgb); doc.circle(cx(k), Y(v), 1.1, 'F');
+          doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(...ink); doc.text(`${fmtNum(v, 0)}%`, cx(k), Y(v) - 2.6, { align: 'center' });
+        });
+      } else caption("The void share can't be worked out: the models aren't closed solids.", M + 4, c0 + ch / 2, PW - 2 * M - 8);
+      // under each point: which version, and when
       evo.forEach((e, k) => {
-        const x = M + (k % cols) * (gw + 5) + (gw - iw) / 2, yy = top + Math.floor(k / cols) * gh;
-        image(e.img, x, yy, iw, ih);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...ink); doc.text(`Version ${e.idx + 1}`, x, yy + ih + 4);
-        doc.setFont('helvetica', 'normal'); doc.setTextColor(...muted); doc.text(pdfText(fmtWhenLong(e.at)), x + iw, yy + ih + 4, { align: 'right' });
+        const d = new Date(e.at);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(8); doc.setTextColor(...ink); doc.text(`v${e.idx + 1}`, cx(k), c1 + 4.5, { align: 'center' });
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...muted);
+        doc.text(pdfText(d.toLocaleDateString([], { weekday: 'short', day: 'numeric', month: 'short' })), cx(k), c1 + 8.5, { align: 'center' });
+        doc.text(pdfText(d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })), cx(k), c1 + 12, { align: 'center' });
       });
-      // the timeline: every version, the ones shown above filled
-      const ty = PH - M - 8, t0 = first, t1 = Math.max(last, first + 1), tx = (t) => M + (t - t0) / (t1 - t0) * (PW - 2 * M);
+      // all the versions in time, the ones drawn filled
+      const ty = PH - M - 5, t0 = first, t1 = Math.max(last, first + 1), tx = (t) => M + (t - t0) / (t1 - t0) * (PW - 2 * M);
       doc.setDrawColor(...rule); doc.setLineWidth(0.3); doc.line(M, ty, PW - M, ty);
       versions.forEach((v, k) => {
         const shown = picks.includes(k);
         doc.setFillColor(...(shown ? rgb : [255, 255, 255])); doc.setDrawColor(...(shown ? rgb : rule));
-        doc.circle(tx(versionTime(v)), ty, shown ? 1.3 : 0.9, 'FD');
+        doc.circle(tx(versionTime(v)), ty, shown ? 1.2 : 0.8, 'FD');
       });
-      caption(pdfText(fmtWhenLong(first)), M, ty + 6, 80);
-      doc.text(pdfText(fmtWhenLong(last)), PW - M, ty + 6, { align: 'right' });
-    }
-    // version by version: charts and the table
-    if (n > 1) {
-      newPage('Version by version');
-      const chart = (x, y0, w, h, label, values, fmt) => {
-        const pts = evo.filter((e) => values(e) !== null);
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...ink); doc.text(label, x, y0 - 3);
-        doc.setDrawColor(...rule); doc.setLineWidth(0.2); doc.rect(x, y0, w, h);
-        if (pts.length < 2) { caption('Not enough closed-solid versions to chart.', x + 3, y0 + h / 2, w - 6); return; }
-        const vs = pts.map(values), lo = Math.min(...vs), hi = Math.max(...vs), pad = (hi - lo) * 0.15 || Math.abs(hi) * 0.1 || 1;
-        const X = (t) => x + 6 + (t - first) / Math.max(1, last - first) * (w - 12), Y = (v) => y0 + h - 5 - (v - (lo - pad)) / ((hi + pad) - (lo - pad)) * (h - 10);
-        doc.setDrawColor(...rgb); doc.setLineWidth(0.6);
-        for (let k = 1; k < pts.length; k++) doc.line(X(pts[k - 1].at), Y(vs[k - 1]), X(pts[k].at), Y(vs[k]));
-        pts.forEach((e, k) => {
-          doc.setFillColor(...rgb); doc.circle(X(e.at), Y(vs[k]), 1, 'F');
-          doc.setFontSize(7.5); doc.setTextColor(...muted); doc.text(`v${e.idx + 1}: ${fmt(vs[k])}`, X(e.at), Y(vs[k]) - 2.2, { align: 'center' });
-        });
-      };
-      chart(M, M + 28, 130, 55, 'Volume (L)', (e) => (e.fig.volume === null ? null : e.fig.volume * 1000), (v) => fmtNum(v, 0));
-      chart(M, M + 98, 130, 55, 'Void share of the bounding box (%)', (e) => (e.fig.voidShare === null ? null : e.fig.voidShare * 100), (v) => fmtNum(v, 0));
-      // the table: every version (figures for the ones drawn)
-      const tx0 = M + 140, head = ['Version', 'Published', 'File', 'Size (m)', 'Volume', 'Void'];
-      const cx = [0, 16, 58, 74, 106, 124];
-      let ty = M + 25;
-      const headRow = () => {
-        doc.setFont('helvetica', 'bold'); doc.setFontSize(8.5); doc.setTextColor(...muted);
-        head.forEach((h, k) => doc.text(h, tx0 + cx[k], ty)); ty += 2; doc.setDrawColor(...rule); doc.line(tx0, ty, PW - M, ty); ty += 4;
-      };
-      headRow();
-      doc.setFont('helvetica', 'normal');
-      versions.forEach((v, k) => {
-        if (ty > PH - M - 6) { newPage('Version by version (continued)'); ty = M + 25; headRow(); doc.setFont('helvetica', 'normal'); }
-        const e = evo.find((x) => x.idx === k);
-        doc.setFontSize(8.5); doc.setTextColor(...ink);
-        const cells = [`${k + 1}`, pdfText(fmtWhenLong(versionTime(v))), v.size ? fmtBytes(v.size) : '–',
-          e ? `${fmtNum(e.fig.size.x)}×${fmtNum(e.fig.size.y)}×${fmtNum(e.fig.size.z)}` : '', e && e.fig.volume !== null ? `${fmtNum(e.fig.volume * 1000, 0)} L` : '', e && e.fig.voidShare !== null ? `${fmtNum(e.fig.voidShare * 100, 0)}%` : ''];
-        cells.forEach((c, j) => doc.text(pdfText(c), tx0 + cx[j], ty));
-        if (v.hidden) { doc.setTextColor(...muted); doc.text('(hidden)', PW - M, ty, { align: 'right' }); }
-        ty += 5;
-      });
-      caption('Sizes, volumes and voids are worked out for the versions drawn on the previous page.', M, PH - M, PW - 2 * M);
+      caption(`All ${n} versions in time: ${pdfText(fmtWhenLong(first))} to ${pdfText(fmtWhenLong(last))}`, M, ty - 2.5, PW - 2 * M);
     }
     // in place
     newPage('In the structure');
     image(shots.context, M, M + 22, 165, 110);
-    caption('In place among the other cubes (greyed), in perspective', M, M + 137, 165);
+    caption(`In place among the other cubes: ${slot.name} in its colour, the rest white; 5 cm grid`, M, M + 137, 165);
     image(shots.contextPlan, M + 172, M + 22, 101, 101);
     caption('Plan of the whole structure, north up', M + 172, M + 128, 101);
     doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...ink); doc.text('Touching', M, M + 148);
     doc.setFont('helvetica', 'normal'); doc.setFontSize(10);
     doc.text(near.length ? doc.splitTextToSize(pdfText(near.map((c) => `${faceTitle(c)} face: ${nameOf(c.hid)}`).join(' · ')), PW - 2 * M) : ['No other cube touches it yet.'], M, M + 154);
-    // interfaces, two to a page
-    for (let k = 0; k < shots.faces.length; k += 2) {
-      newPage(k ? 'Interfaces (continued)' : 'Interfaces');
-      shots.faces.slice(k, k + 2).forEach((f, j) => {
-        const props = doc.getImageProperties(f.img), w = (PW - 2 * M - 8) / 2, h = Math.min(w * props.height / props.width, PH - M - (M + 22) - 4);
-        doc.addImage(f.img, 'PNG', M + j * (w + 8), M + 22, h * props.width / props.height, h, undefined, 'FAST');
-      });
+    // interfaces: the 3D view on the left, the faces' panels down the right (more on the next pages)
+    if (shots.faces.length) {
+      const top = M + 22, avail = PH - M - top - 2;
+      const stack = (list, x, w) => {   // panels one under another, as big as fits
+        const props = list.map((f) => doc.getImageProperties(f.img));
+        const gap = 3, ratio = Math.max(...props.map((p2) => p2.height / p2.width));
+        const h = Math.min(w * ratio, (avail - gap * (list.length - 1)) / list.length), pw = h / ratio;
+        list.forEach((f, k) => {
+          const ph = pw * props[k].height / props[k].width;
+          doc.addImage(f.img, 'PNG', x + (w - pw) / 2, top + k * (h + gap), pw, ph, undefined, 'FAST');
+        });
+      };
+      newPage('Interfaces');
+      const vw = 150;
+      if (shots.ifaceView) {
+        image(shots.ifaceView, M, top, vw, vw);
+        caption(`${slot.name} and the cubes it touches, pulled apart, with the shared faces drawn in the gaps`, M, top + vw + 4, vw);
+      }
+      stack(shots.faces.slice(0, 3), M + vw + 6, PW - 2 * M - vw - 6);
+      for (let k = 3; k < shots.faces.length; k += 6) {   // more faces: two columns of three
+        newPage('Interfaces (continued)');
+        const w = (PW - 2 * M - 8) / 2;
+        stack(shots.faces.slice(k, k + 3), M, w);
+        if (shots.faces.length > k + 3) stack(shots.faces.slice(k + 3, k + 6), M + w + 8, w);
+      }
     }
     // the environment: sun, rain, wind
     // a colour ramp with its ticks; `ticks`: [label, where along it (0..1)]
@@ -6349,24 +6401,16 @@ async function buildReport(slot) {
       const cm = shots.wind.find((w2) => w2.run)?.run.cm;
       caption(`The air flowing round and through the whole structure, simulated (lattice Boltzmann${cm ? `, ${cm.toFixed(1)} cm cells` : ''}) and averaged over the last part of the run. Blue is sheltered, red is where the air speeds up. Tainan's winter monsoon blows from the north-east, the summer one from the south-west.`, M, M + 156, PW - 2 * M);
     }
-    // voids, if it published its negative space
-    if (latest.voids?.length) {
-      newPage('Voids');
-      caption('The objects that cut the voids, as the group published them (negative space). Volume only for closed shapes.', M, M + 21, PW - 2 * M);
-      let vy = M + 30;
-      doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...muted);
-      ['', 'Name', 'Size', 'Volume'].forEach((h, k) => doc.text(h, M + [0, 8, 90, 150][k], vy)); vy += 6;
-      doc.setFont('helvetica', 'normal');
-      for (const v of latest.voids) {
-        if (vy > PH - M) { newPage('Voids (continued)'); vy = M + 26; }
-        const c2 = [1, 3, 5].map((j) => parseInt(String(v.color).slice(j, j + 2), 16));
-        if (c2.every(Number.isFinite)) { doc.setFillColor(...c2); doc.rect(M, vy - 3, 4, 4, 'F'); }
-        doc.setTextColor(...ink);
-        doc.text(pdfText(v.name || `Void ${v.number}`), M + 8, vy);
-        doc.text(pdfText(fmtSize(v.size)), M + 90, vy);
-        doc.text(v.volume === null ? '–' : `${fmtNum(v.volume * 1000, 1)} L`, M + 150, vy);
-        vy += 6;
-      }
+    // in the city, with the wildlife: no interface, no grid, the group in its colour
+    newPage('In the city');
+    {
+      const top = M + 22, bw = 170, bh = bw / 1.5, sw = PW - 2 * M - bw - 6, sh = sw / 1.4;
+      image(shots.city[0].img, M, top, bw, bh); caption(shots.city[0].label, M, top + bh + 4, bw);
+      shots.city.slice(1).forEach((c2, k) => {
+        const y2 = top + k * (sh + 10);
+        image(c2.img, M + bw + 6, y2, sw, sh); caption(c2.label, M + bw + 6, y2 + sh + 4, sw);
+      });
+      caption(`${slot.name} in its colour among the other cubes (white), set in a Tainan street (the City backdrop: painted, very loosely) with the wildlife about, as it happened to be.`, M, PH - M, PW - 2 * M);
     }
     // page numbers
     const total = doc.getNumberOfPages();
@@ -6379,7 +6423,11 @@ async function buildReport(slot) {
     console.error(err);
     shotSay(`The report couldn't be made: ${err.message || err}.`);
   } finally {
-    for (const [m, c] of greyed) m.color.copy(c);
+    mode = saved.mode;
+    for (const [bid, b] of Object.entries(blocks)) if (b.raw) paint(bid, b.raw, b.ghost);
+    setGrid(saved.grid);
+    if (!saved.city && cityOn) setCity(false);
+    if (!saved.wildOn && wildOn) setWild(false);
     scene.background = saved.bg; paving.visible = saved.paving; wildLayer.visible = saved.wild; critterLayer.visible = saved.critters;
     rainOnU.value = saved.rain; windUniforms.windOn.value = saved.wind;
     saved.cuts.forEach((c, k) => Object.assign(cuts[k], c)); sectionOn = saved.sectionOn; updateCuts();
@@ -6831,14 +6879,15 @@ function publishedLine(slot) {
   const when = new Date(b.publishedAt).toLocaleString([], { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   return `${TITLE} · ${slot.name}${b.versionCount > 1 ? `, version ${b.version + 1} of ${b.versionCount}` : ''}, published ${when}`;
 }
-async function facePanelImage(slot, c, d) {
+async function facePanelImage(slot, c, d, { compact = false } = {}) {
   const h2c = await loadH2C();
   const panel = document.createElement('section');
   panel.className = 'sheet';
   // laid out like the sheet but whole (no scrolling), out of sight behind the 3D view
   panel.style.cssText = 'position:fixed;left:0;top:0;right:auto;bottom:auto;z-index:-5;width:560px;height:auto;max-height:none;overflow:visible;';
   const when = historyAt === null ? '' : ` at ${clock(historyAt)}`;
-  panel.innerHTML = `<header><h2>${esc(slot.name)} · interfaces${when}</h2></header>${faceDetailHtml(slot, c, d)}<p class="shot-foot">${esc(publishedLine(slot))}</p>`;
+  panel.innerHTML = compact ? faceDetailHtml(slot, c, d)
+    : `<header><h2>${esc(slot.name)} · interfaces${when}</h2></header>${faceDetailHtml(slot, c, d)}<p class="shot-foot">${esc(publishedLine(slot))}</p>`;
   const copy = document.createElement('canvas');
   copy.width = d.canvas.width; copy.height = d.canvas.height;
   copy.getContext('2d').drawImage(d.canvas, 0, 0);
