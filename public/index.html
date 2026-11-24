@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Workshop live</title>
+<title>Tainan Squeeze</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,300..800&display=swap" rel="stylesheet">
@@ -184,6 +184,12 @@
   .history .live { border: 1px solid var(--rule); background: #fff; border-radius: 5px; padding: 5px 10px; cursor: pointer;
     font-weight: 650; white-space: nowrap; }
   .history .live[aria-pressed="true"] { background: #b3261e; border-color: #b3261e; color: #fff; }
+  .tl-step { display: inline-flex; align-items: center; gap: 5px; color: var(--muted); font-weight: 600; }
+  .tl-step select { font: inherit; color: var(--ink); border: 1px solid var(--rule); border-radius: 5px; background: #fff; padding: 4px 6px; }
+  .history .dd-toggle { border: 1px solid var(--rule); background: #fff; border-radius: 5px; padding: 5px 10px; cursor: pointer; font: inherit; }
+  .history .dd-toggle:hover { background: #e8ebec; }
+  .history .menu { font-size: 14px; }
+  .menu .menu-note { margin: 4px 8px 6px; max-width: 260px; font-size: 12.5px; line-height: 1.35; color: var(--muted); white-space: normal; }
   .history .hide { border: 0; background: none; color: var(--muted); font-size: 20px; line-height: 1; padding: 0 2px 2px; cursor: pointer; }
   .history .hide:hover { color: var(--ink); }
   .tl-chart { display: grid; grid-template-columns: auto 1fr; column-gap: 8px; }
@@ -454,7 +460,7 @@
 
 <div class="top">
   <header class="title">
-    <h1 id="title">Tainan Rocks</h1>
+    <h1 id="title">Tainan Squeeze</h1>
     <p id="status" role="status">Connecting…</p>
   </header>
   <div class="controls">
@@ -565,7 +571,23 @@
       <button class="step" id="hist-prev" aria-label="Previous update" title="Previous update ([)">‹</button>
       <button class="step" id="hist-play" aria-label="Replay the updates" title="Replay the updates">▶</button>
       <button class="step" id="hist-next" aria-label="Next update" title="Next update (])">›</button>
+      <label class="tl-step" title="What ▶, ‹ › and the frames go by: each update, or a fixed time">Step
+        <select id="hist-step">
+          <option value="update">each update</option><option value="5">5 min</option><option value="15">15 min</option>
+          <option value="30">30 min</option><option value="60">1 hour</option><option value="120">2 hours</option><option value="1440">1 day</option>
+        </select></label>
       <div class="when" id="hist-when" aria-live="polite"></div>
+      <div class="dd tl-frames">
+        <button class="dd-toggle" type="button" aria-haspopup="true" aria-expanded="false" aria-controls="menu-frames" title="Export the timeline as a series of PNG frames">Frames <span aria-hidden="true">▾</span></button>
+        <div class="menu" id="menu-frames" role="group" aria-label="Export frames" hidden>
+          <p class="menu-note" id="frames-what"></p>
+          <button type="button" data-frames-size="screen" aria-pressed="true" title="The size of the view on screen">As on screen</button>
+          <button type="button" data-frames-size="hd" aria-pressed="false">1920 × 1080</button>
+          <button type="button" data-frames-size="4k" aria-pressed="false">3840 × 2160</button>
+          <button type="button" id="frames-ui" aria-pressed="false" title="Draw the panels, buttons and labels into every frame (as on screen only; slower)">Include the interface</button>
+          <button type="button" id="frames-go" class="first-shot" data-close>Export frames…</button>
+        </div>
+      </div>
       <button class="live" id="hist-live" aria-pressed="true" title="Show the newest version of every group and follow new updates">● Live</button>
       <button class="hide" id="hist-hide" type="button" aria-label="Hide the timeline" title="Hide the timeline (H)">×</button>
     </div>
@@ -669,7 +691,7 @@ import rhino3dm from 'rhino3dm';
 
 // ---------- settings (URL parameters, e.g. ?title=Studio%20B&groups=8&explode=1.5&view=combined&poll=5)
 const params = new URLSearchParams(location.search);
-const TITLE = params.get('title') || 'Tainan Rocks';
+const TITLE = params.get('title') || 'Tainan Squeeze';
 const POLL_MS = Math.max(3, Number(params.get('poll')) || 5) * 1000;
 const GROUPS = Math.max(1, Math.min(24, Math.round(Number(params.get('groups'))) || 8));
 const STATE_URL = params.get('api') || '/api/state';
@@ -1924,7 +1946,7 @@ function drawHistory() {
   histEl.hidden = !historyShown || updates.length < 1;
   if (histEl.hidden) return;
   const i = historyIndex(updates), u = updates[i];
-  const cur = historyAt === null ? updates[updates.length - 1].at : u.at;
+  const cur = historyAt === null ? updates[updates.length - 1].at : historyAt;   // stepping by time, it can sit between updates
   for (const b of periodBtns) b.setAttribute('aria-pressed', b.dataset.period === period);
   // Day: which day, and the days either side that have updates
   const days = [...new Set(updates.map((x) => dayKey(x.at)))];
@@ -1990,13 +2012,56 @@ function drawHistory() {
     b.textContent = 'Live';
     histWhen.replaceChildren(b, ` · ${updates.length} ${updates.length === 1 ? 'update' : 'updates'}${focus ? ` of ${focus.name}` : ''} so far`);
   } else {
-    b.textContent = `Update ${i + 1} of ${updates.length}`;
-    histWhen.replaceChildren(b, focus ? ` · v${u.idx + 1} · ${fmtWhen(u.at)}` : ` · ${slotName(u.id)} v${u.idx + 1} · ${fmtWhen(u.at)}`);
+    if (historyAt !== u.at) {   // a moment between updates
+      b.textContent = fmtWhen(historyAt);
+      histWhen.replaceChildren(b, ` · ${i + 1} of ${updates.length} updates by then`);
+    } else {
+      b.textContent = `Update ${i + 1} of ${updates.length}`;
+      histWhen.replaceChildren(b, focus ? ` · v${u.idx + 1} · ${fmtWhen(u.at)}` : ` · ${slotName(u.id)} v${u.idx + 1} · ${fmtWhen(u.at)}`);
+    }
   }
   histLive.setAttribute('aria-pressed', historyAt === null);
   histPlay.textContent = replayTimer ? '❚❚' : '▶';
-  histPlay.setAttribute('aria-label', replayTimer ? 'Pause the replay' : period === 'day' ? "Replay this day's updates" : 'Replay every update from the start');
+  histPlay.setAttribute('aria-label', replayTimer ? 'Pause the replay' : stepMs() ? `Play through ${period === 'day' ? 'the day' : 'the timeline'}, ${stepName()} a second`
+    : period === 'day' ? "Replay this day's updates" : 'Replay every update from the start');
+  document.getElementById('hist-prev').title = stepMs() ? `Back ${stepName().replace('every ', '')} ([)` : 'Previous update ([)';
+  document.getElementById('hist-next').title = stepMs() ? `On ${stepName().replace('every ', '')} (])` : 'Next update (])';
+  const frames = stepTimes(updates);
+  document.getElementById('frames-what').textContent = frames.length
+    ? `${frames.length} ${frames.length === 1 ? 'frame' : 'frames'}, ${stepName()}, from ${fmtWhen(frames[0])} to ${fmtWhen(frames[frames.length - 1])}${focus ? ` (${focus.name} only)` : ''}. Change the step, Day or All time to change them.`
+    : 'No updates to make frames of.';
   histPlay.title = histPlay.getAttribute('aria-label');
+}
+// ---- the step: each update, or a fixed time (remembered in this browser). ▶, ‹ › and the frames go by it.
+const STEP_MIN = { update: 0, 5: 5, 15: 15, 30: 30, 60: 60, 120: 120, 1440: 1440 };
+let tlStep = (() => { try { const v = localStorage.getItem('tainanrocks.step'); return v in STEP_MIN ? v : 'update'; } catch { return 'update'; } })();
+const stepMs = () => STEP_MIN[tlStep] * 60000;
+const stepName = () => (stepMs() ? `every ${document.querySelector(`#hist-step option[value="${tlStep}"]`).textContent}` : 'each update');
+// The span the timeline shows: everything, or the day in view (from its first update to its last).
+function shownSpan(updates) {
+  if (period !== 'day') return [updates[0].at, updates[updates.length - 1].at];
+  const cur = historyAt === null ? updates[updates.length - 1].at : historyAt;
+  const key = shownDay || dayKey(cur), on = updates.filter((u) => dayKey(u.at) === key);
+  return on.length ? [on[0].at, on[on.length - 1].at] : [updates[0].at, updates[updates.length - 1].at];
+}
+// The moments to step through across that span: each update in it, or every step from its first to its last.
+function stepTimes(updates = timelineUpdates()) {
+  if (!updates.length) return [];
+  const [t0, t1] = shownSpan(updates);
+  if (!stepMs()) return updates.filter((u) => u.at >= t0 && u.at <= t1).map((u) => u.at);
+  const out = [];
+  for (let t = t0; t < t1; t += stepMs()) out.push(t);
+  out.push(t1);
+  return out;
+}
+// Show the structure as it was at time t (the newest update or later: live).
+async function goToTime(t, updates = timelineUpdates()) {
+  if (!updates.length) return;
+  historyAt = t >= updates[updates.length - 1].at ? null : Math.max(t, updates[0].at);
+  shownDay = null;
+  renderHistory();
+  if (await sync()) refreshScene();
+  else { renderContext(); renderStatus(); renderCard(); }
 }
 // `updates`: the list `i` counts in (the timeline's, unless said otherwise).
 async function goToUpdate(i, updates = timelineUpdates()) {
@@ -2015,9 +2080,14 @@ async function goToUpdate(i, updates = timelineUpdates()) {
   }
 }
 function stepHistory(d) {
-  const i = historyIndex(timelineUpdates()) + d;
   stopReplay();
-  goToUpdate(i);
+  const updates = timelineUpdates();
+  if (stepMs() && updates.length) {   // a fixed time back or on
+    const cur = historyAt === null ? updates[updates.length - 1].at : historyAt;
+    goToTime(cur + d * stepMs(), updates);
+    return;
+  }
+  goToUpdate(historyIndex(updates) + d);
 }
 function stopReplay() {
   clearInterval(replayTimer);
@@ -2026,6 +2096,7 @@ function stopReplay() {
 }
 // Replay, one update per second: from the start (in Day, from the day's first update), or on from where it is.
 function startReplay() {
+  if (stepMs()) return startTimedReplay();
   const updates = timelineUpdates();
   let start = historyAt === null ? 0 : historyIndex(updates) + 1;
   if (period === 'day' && (historyAt === null || shownDay)) {
@@ -2041,6 +2112,29 @@ function startReplay() {
   }, 1000);
   renderHistory();
 }
+// Replay by the clock: one step of time a second, across the span shown (from where it is, or from its start).
+function startTimedReplay() {
+  const times = stepTimes();
+  if (!times.length) return;
+  let i = historyAt === null ? 0 : times.findIndex((t) => t > historyAt);
+  if (i < 0) i = 0;
+  goToTime(times[i]);
+  replayTimer = setInterval(() => {
+    i++;
+    if (i >= times.length) return stopReplay();
+    goToTime(times[i]);
+    if (i === times.length - 1) stopReplay();
+  }, 1000);
+  renderHistory();
+}
+const stepSel = document.getElementById('hist-step');
+stepSel.value = tlStep;
+stepSel.onchange = () => {
+  tlStep = stepSel.value;
+  try { localStorage.setItem('tainanrocks.step', tlStep); } catch { /* this visit only */ }
+  stopReplay();
+  renderHistory();
+};
 // Click or drag on the chart: the newest update at or before that moment.
 function scrubTo(clientX) {
   const r = tlPlot.getBoundingClientRect();
@@ -6585,6 +6679,148 @@ function copyView() {
 }
 document.getElementById('btn-copy-view').addEventListener('click', copyView);
 document.getElementById('btn-save-view').addEventListener('click', saveView);
+
+// ---------- frames: the timeline as a series of PNGs, one for each step (each update, or every so
+// many minutes) across the span it shows, as the view is now (the camera stays put). Each frame has
+// a strip saying when it is. Where the browser can write to a folder (Chrome, Edge), they go straight
+// into a new folder in the one you pick; elsewhere they come as a .zip holding that folder.
+let framesSize = 'screen';
+const FRAME_SIZES = { hd: [1920, 1080], '4k': [3840, 2160] };
+const framesSizeBtns = [...document.querySelectorAll('[data-frames-size]')];
+const framesUIBtn = document.getElementById('frames-ui');
+function renderFramesMenu() {
+  for (const b of framesSizeBtns) b.setAttribute('aria-pressed', b.dataset.framesSize === framesSize);
+  framesUIBtn.setAttribute('aria-pressed', shotUI && framesSize === 'screen');
+  framesUIBtn.disabled = framesSize !== 'screen';   // the interface only fits the screen's own size
+}
+for (const b of framesSizeBtns) b.onclick = () => { framesSize = b.dataset.framesSize; renderFramesMenu(); };
+framesUIBtn.onclick = () => { btnShotUI.click(); renderFramesMenu(); };   // the same setting as the screenshots'
+btnShotUI.addEventListener('click', renderFramesMenu);
+renderFramesMenu();
+let framesBusy = false;
+async function frameImage(t, size, ui) {
+  if (size) { renderer.setPixelRatio(1); renderer.setSize(size[0], size[1], false); camera.aspect = size[0] / size[1]; camera.clearViewOffset(); camera.updateProjectionMatrix(); }
+  const gl = renderer.domElement, W = gl.width, H = gl.height;
+  sizeDots(camera, size ? size[1] : gl.clientHeight);
+  turnGroundCompass(camera);
+  if (sectionUniform.value) placeCaps();
+  renderer.render(scene, camera);
+  // the strip lies over the bottom of the frame, so a frame is exactly the size asked for (for video);
+  // with the interface, it goes under it instead, to cover none of it
+  const band = Math.round(Math.max(28, H * 0.045)), k = band / 40, sy = ui ? H : H - band;
+  const out = document.createElement('canvas');
+  out.width = W; out.height = ui ? H + band : H;
+  const g = out.getContext('2d');
+  g.drawImage(gl, 0, 0);   // before anything waits: the frame only lasts this task
+  if (ui) {
+    try {
+      const h2c = await loadH2C();
+      const c = await h2c(document.body, { backgroundColor: null, scale: W / gl.clientWidth, logging: false, x: 0, y: 0, scrollX: 0, scrollY: 0,
+        width: innerWidth, height: innerHeight, windowWidth: innerWidth, windowHeight: innerHeight, onclone: h2cClone,
+        ignoreElements: (el) => el === gl || el.classList?.contains('menu') || el.classList?.contains('report-wait') || el.id === 'exit-present' || el.tagName === 'DIALOG' });
+      g.drawImage(c, 0, 0, W, H);
+    } catch { /* the 3D view alone */ }
+  }
+  // the strip: when it is, and what was published by then
+  const focus = timelineFocus();
+  const shown = Object.keys(groupVersions).filter((id) => versionIndexAt(id, t) >= 0 && (!focus || inSlot(focus, id)));
+  let what;
+  if (focus) {
+    const idx = shown.length ? versionIndexAt(shown[0], t) : -1;
+    what = idx >= 0 ? `${focus.name}, version ${idx + 1}` : `${focus.name}: not published yet`;
+  } else what = `${shown.length} of ${Math.max(GROUPS, slotList.length)} groups published`;
+  g.fillStyle = '#f6f7f5'; g.fillRect(0, sy, W, band);
+  g.fillStyle = '#a9b2bb'; g.fillRect(0, sy, W, Math.max(1, Math.round(k)));
+  g.textBaseline = 'middle';
+  g.fillStyle = '#1e232a'; g.font = `700 ${Math.round(16 * k)}px Archivo, system-ui, sans-serif`;
+  const when = fmtWhenLong(t);
+  g.fillText(when, Math.round(14 * k), sy + band / 2);
+  const ww = g.measureText(when).width;
+  g.fillStyle = '#66707b'; g.font = `500 ${Math.round(14 * k)}px Archivo, system-ui, sans-serif`;
+  g.fillText(`·  ${what}`, Math.round(14 * k) + ww + Math.round(10 * k), sy + band / 2);
+  g.textAlign = 'right';
+  g.fillText(TITLE, W - Math.round(14 * k), sy + band / 2);
+  return new Promise((res) => out.toBlob(res, 'image/png'));
+}
+async function exportFrames() {
+  if (framesBusy || reportBusy) return;
+  const updates = timelineUpdates(), times = stepTimes(updates);
+  if (!times.length) { shotSay('There are no updates to make frames of.'); return; }
+  const focus = timelineFocus();
+  const name = `${safe(TITLE)}_${focus ? safe(focus.name) + '_' : ''}frames_${stamp(Date.now())}`;
+  let folder = null;
+  if (window.showDirectoryPicker) {   // asked first, while the click still counts
+    try {
+      const root = await window.showDirectoryPicker({ id: 'frames', mode: 'readwrite' });
+      folder = await root.getDirectoryHandle(name, { create: true });
+    } catch (err) {
+      if (err?.name === 'AbortError') return;   // they closed the picker
+      folder = null;
+    }
+  }
+  framesBusy = true;
+  stopReplay();
+  const size = FRAME_SIZES[framesSize] || null, ui = shotUI && !size;
+  const wait = document.createElement('div');
+  wait.className = 'report-wait';
+  wait.innerHTML = `<div role="status"><b>Frames: ${times.length}, ${esc(stepName())}</b><p>Getting ready…</p><i></i>
+    <button type="button" class="tool" style="margin-top:12px">Stop</button></div>`;
+  let stopped = false;
+  wait.querySelector('button').onclick = () => { stopped = true; };
+  document.body.append(wait);
+  const saved = { historyAt, wild: wildLayer.visible, critters: critterLayer.visible, rain: rainOnU.value, wind: windUniforms.windOn.value, rainPts: rainPoints.visible, windLn: windLines.visible };
+  renderer.setAnimationLoop(null);
+  const entries = {};
+  let made = 0;
+  try {
+    // still frames: no animals mid-flight, no rain or wind (those simulations are of one moment)
+    wildLayer.visible = critterLayer.visible = rainPoints.visible = windLines.visible = false;
+    rainOnU.value = 0; windUniforms.windOn.value = 0;
+    const lastAt = updates[updates.length - 1].at;
+    for (let k = 0; k < times.length && !stopped; k++) {
+      wait.querySelector('p').textContent = `Frame ${k + 1} of ${times.length}: ${fmtWhen(times[k])}`;
+      wait.querySelector('i').style.setProperty('--done', `${Math.round(100 * k / times.length)}%`);
+      historyAt = times[k] >= lastAt ? null : times[k];
+      await sync();
+      layout();
+      snapHolders();
+      for (const l of Object.values(labels)) l.position.copy(l.userData.target);
+      matrixFade = view === 'matrix' ? 1 : 0; dashMat.opacity = matrixFade * 0.9; decor.visible = view === 'matrix';
+      if (expoOn) { expoKey = ''; expoAt = 0; updateExposure(); }
+      if (ui) { renderStatus(); renderHistory(); renderGroups(); renderContext(); renderCard(); labelRenderer.render(scene, camera); }
+      const blob = await frameImage(times[k], size, ui);
+      const file = `frame_${String(k + 1).padStart(4, '0')}.png`;
+      if (folder) {
+        const w = await (await folder.getFileHandle(file, { create: true })).createWritable();
+        await w.write(blob); await w.close();
+      } else entries[`${name}/${file}`] = [new Uint8Array(await blob.arrayBuffer()), { level: 0 }];   // PNGs are packed already
+      made++;
+    }
+    if (!folder && made) {
+      wait.querySelector('p').textContent = 'Packing the frames…';
+      const { zipSync } = await import('fflate');
+      saveFile(zipSync(entries), `${name}.zip`, 'application/zip');
+    }
+    const end = stopped ? ` (stopped after ${made} of ${times.length})` : '';
+    shotSay(!made ? 'No frames were made.' : folder ? `${made} frames${end} were saved in the folder ${name}.` : `${made} frames${end} were saved in ${name}.zip.`);
+  } catch (err) {
+    console.error(err);
+    shotSay(`The frames couldn't be made: ${err.message || err}${made ? ` (${made} were made)` : ''}.`);
+  } finally {
+    wildLayer.visible = saved.wild; critterLayer.visible = saved.critters; rainOnU.value = saved.rain; windUniforms.windOn.value = saved.wind;
+    historyAt = saved.historyAt;
+    await sync();
+    renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+    resize();
+    layout();
+    applyInsets();
+    renderStatus(); renderHistory(); renderGroups(); renderContext(); renderCard();
+    renderer.setAnimationLoop(loop);
+    wait.remove();
+    framesBusy = false;
+  }
+}
+document.getElementById('frames-go').addEventListener('click', exportFrames);
 
 // ---------- the interfaces sheet's panels as images: Copy image (the face shown, so they can be
 // copied one by one) and Save all (every face, as PNGs in a .zip). Each is the face's panel as on
